@@ -17,7 +17,9 @@ a cluster from scratch, assuming no prior experience with either.
     ./install_milo.sh --prefix ~/milo --add-path
 
 installs Milo and the tools under one directory of your choosing and records
-where they went, so nothing below has a path compiled into it.
+where they went, so nothing below has a path compiled into it. Add `--shared`
+to install once for a group; `--tarball FILE` if the machine cannot reach
+GitHub.
 
 ## Layout
 

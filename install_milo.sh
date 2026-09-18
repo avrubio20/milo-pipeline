@@ -15,7 +15,9 @@
 #   --scratch DIR     fast temporary space for jobs    [detected]
 #   --account NAME    scheduler account to bill        [none]
 #   --config FILE     where the choices are recorded   [$HOME/.milo.conf]
-#   --add-path        put bindir on your PATH via ~/.bashrc
+#   --tarball FILE    install Milo from a local tarball instead of downloading
+#   --shared          make the install readable and usable by your unix group
+#   --add-path        put bindir on your PATH (~/.bashrc, or ~/.cshrc under csh)
 #   --force           replace installed files that differ from these
 #
 # The choices land in the config file, and the tools read them from there, so
@@ -36,7 +38,7 @@ detect_host() {
     if [[ -n "${SGE_ROOT:-}" || -d /u/local/Modules ]]; then
         HOST=hoffman2
         SCHEDULER=uge
-        DEF_SCRATCH='${TMPDIR:-$SCRATCH}'
+        DEF_SCRATCH='${TMPDIR:-${SCRATCH:-/tmp}}'
         G16_SETUP='. /u/local/Modules/default/init/modules.sh
 module load gaussian
 module load python/3.9.6'
@@ -57,6 +59,7 @@ detect_host
 DEFAULT_PREFIX="$HOME/milo"
 PREFIX=""; BINDIR=""; MILO_DIR=""; SCRATCH=""; ACCOUNT=""
 CONFIG="$HOME/.milo.conf"
+TARBALL=""; SHARED=0
 DRY=0; FORCE=0; CHECK=0; ADDPATH=0; EXAMPLE=0
 
 # Exits rather than returns: a value swallowed by the next flag is worse than
@@ -75,6 +78,8 @@ while [[ $# -gt 0 ]]; do
         --scratch)  argval "$1" "${2:-}"; SCRATCH="$2";  shift 2;;
         --account)  argval "$1" "${2:-}"; ACCOUNT="$2";  shift 2;;
         --config)   argval "$1" "${2:-}"; CONFIG="$2";   shift 2;;
+        --tarball)  argval "$1" "${2:-}"; TARBALL="$2"; shift 2;;
+        --shared)   SHARED=1;   shift;;
         --check)    CHECK=1;    shift;;
         --example)  EXAMPLE=1;  shift;;
         --add-path) ADDPATH=1;  shift;;
@@ -138,15 +143,17 @@ if [[ $CHECK -eq 1 ]]; then
             || note "no sbatch on PATH; submitting will not work from here"
     fi
 
-    if [[ "$HOST" == hoffman2 ]]; then
-        groups 2>/dev/null | tr ' ' '\n' | grep -qx gaussian \
-            && ok "you are in the 'gaussian' group" \
-            || bad "you are NOT in the 'gaussian' group; Gaussian will not run"
-    fi
-
+    # Whether g16 runs is the fact; the group is only the usual reason it does
+    # not. Sites license Gaussian to differently-named groups, so a missing
+    # 'gaussian' group with a working g16 is not an error.
     if (eval "$G16_SETUP" >/dev/null 2>&1; command -v g16 >/dev/null); then
         ok "g16 is reachable"
+        groups 2>/dev/null | tr ' ' '\n' | grep -qx gaussian \
+            || note "not in the 'gaussian' group, but g16 works -- your site"\
+                    "may license it to another group"
     else
+        groups 2>/dev/null | tr ' ' '\n' | grep -qx gaussian \
+            || bad "you are not in the 'gaussian' group, which is usually why"
         bad "g16 is not reachable after the setup lines in $CONFIG"
         echo "        If you are in the gaussian group, this is usually the shell:"
         echo "        the gaussian module needs \$SCRATCH, which only a login shell"
@@ -191,21 +198,31 @@ if [[ -f "$MILO_DIR/milo_1_0_3/__main__.py" ]]; then
 elif [[ $DRY -eq 1 ]]; then
     echo "  would: download $MILO_URL into $MILO_DIR"
 else
-    echo "Milo: downloading into $MILO_DIR"
-    mkdir -p "$MILO_DIR" || exit 1
-    tarball="$(mktemp)"
-    if command -v curl >/dev/null; then
-        curl -fsSL "$MILO_URL" -o "$tarball"
-    elif command -v wget >/dev/null; then
-        wget -q "$MILO_URL" -O "$tarball"
+    mkdir -p "$MILO_DIR" || { echo "ERROR: cannot create $MILO_DIR" >&2; exit 1; }
+    if [[ -n "$TARBALL" ]]; then
+        echo "Milo: unpacking $TARBALL into $MILO_DIR"
+        tarball="$TARBALL"
+        [[ -f "$tarball" ]] || { echo "ERROR: no such file: $tarball" >&2; exit 1; }
     else
-        echo "ERROR: neither curl nor wget; fetch $MILO_URL by hand" >&2; exit 1
-    fi || { echo "ERROR: could not download $MILO_URL" >&2; exit 1; }
+        echo "Milo: downloading into $MILO_DIR"
+        tarball="$(mktemp)"
+        if command -v curl >/dev/null; then
+            curl -fsSL "$MILO_URL" -o "$tarball"
+        elif command -v wget >/dev/null; then
+            wget -q "$MILO_URL" -O "$tarball"
+        else
+            echo "ERROR: neither curl nor wget available." >&2
+            echo "       Download $MILO_URL elsewhere and pass --tarball FILE." >&2
+            exit 1
+        fi || { echo "ERROR: could not download $MILO_URL." >&2
+                echo "       If this node has no way out, download it elsewhere" >&2
+                echo "       and pass --tarball FILE." >&2; exit 1; }
+    fi
     # The tarball has its own top-level directory; --strip-components drops it
     # so MILO_DIR holds milo_1_0_3/ directly, whatever the release is called.
     tar -xzf "$tarball" --strip-components=1 -C "$MILO_DIR" \
         || { echo "ERROR: could not unpack $tarball" >&2; exit 1; }
-    rm -f "$tarball"
+    [[ -n "$TARBALL" ]] || rm -f "$tarball"
     [[ -f "$MILO_DIR/milo_1_0_3/__main__.py" ]] \
         || { echo "ERROR: $MILO_DIR is not a Milo install" >&2; exit 1; }
 fi
@@ -215,7 +232,11 @@ run mkdir -p "$BINDIR" || { echo "ERROR: cannot create $BINDIR" >&2; exit 1; }
 STALE=0
 for f in "${TOOLS[@]}" "${SUITES[@]}"; do
     [[ -f "$SRC/$f" ]] || { echo "  ERROR: $SRC/$f is missing" >&2; exit 1; }
-    if [[ -e "$BINDIR/$f" && $FORCE -eq 0 ]] && ! cmp -s "$SRC/$f" "$BINDIR/$f"; then
+    if [[ -e "$BINDIR/$f" ]] && cmp -s "$SRC/$f" "$BINDIR/$f"; then
+        echo "  $f (already current)"
+        continue
+    fi
+    if [[ -e "$BINDIR/$f" && $FORCE -eq 0 ]]; then
         echo "  $f DIFFERS from the copy here -- --force to replace"
         STALE=1
         continue
@@ -231,7 +252,12 @@ if [[ $DRY -eq 1 ]]; then
 else
     mkdir -p "$(dirname "$CONFIG")" \
         || { echo "ERROR: cannot create $(dirname "$CONFIG")" >&2; exit 1; }
-    cat > "$CONFIG" <<CONF
+    [[ ! -e "$CONFIG" || -w "$CONFIG" ]] \
+        || { echo "ERROR: $CONFIG is not yours to write" >&2; exit 1; }
+    # Written aside and moved into place: a half-written config read by a job
+    # is worse than no config.
+    tmp_config="$CONFIG.$$"
+    cat > "$tmp_config" <<CONF
 # Milo pipeline. Written by install_milo.sh on $(date +%F).
 # Re-run it to change these, or edit them here -- the tools read this file.
 bindir    = $BINDIR
@@ -243,8 +269,15 @@ account   = $ACCOUNT
 # Shell lines that make g16 (and python) runnable inside a job.
 g16_setup = $(echo "$G16_SETUP" | sed '2,$s/^/            /')
 CONF
-    [[ -s "$CONFIG" ]] || { echo "ERROR: could not write $CONFIG" >&2; exit 1; }
+    [[ -s "$tmp_config" ]] && mv "$tmp_config" "$CONFIG" \
+        || { rm -f "$tmp_config"; echo "ERROR: could not write $CONFIG" >&2; exit 1; }
     echo "  recorded; MILO_CONF overrides the location"
+    # A copy beside the tools, so someone who only has PREFIX/bin on their PATH
+    # gets these settings without being told them. Their own ~/.milo.conf wins.
+    shared_dir="$(dirname "$BINDIR")/etc"
+    if mkdir -p "$shared_dir" 2>/dev/null && cp "$CONFIG" "$shared_dir/milo.conf" 2>/dev/null; then
+        echo "  copy at $shared_dir/milo.conf for anyone else using this install"
+    fi
 fi
 
 if [[ $EXAMPLE -eq 1 ]]; then
@@ -254,28 +287,44 @@ if [[ $EXAMPLE -eq 1 ]]; then
     echo "  DA_example.in (16-atom Diels-Alder, 50 steps, 8 cpus / 12 GB)"
 fi
 
-PATH_LINE="export PATH=\"\$PATH:$BINDIR\""
+# Which startup file depends on the login shell, and Hoffman2 hands out both.
+case "${SHELL:-/bin/bash}" in
+    *csh) RC="$HOME/.cshrc"; PATH_LINE="setenv PATH \"\${PATH}:$BINDIR\"";;
+    *)    RC="$HOME/.bashrc"; PATH_LINE="export PATH=\"\$PATH:$BINDIR\"";;
+esac
 echo
 if [[ ":$PATH:" == *":$BINDIR:"* ]]; then
     echo "PATH: $BINDIR is already on it."
 elif [[ $ADDPATH -eq 1 ]]; then
-    if grep -qsF "$PATH_LINE" "$HOME/.bashrc"; then
-        echo "~/.bashrc already has: $PATH_LINE"
+    if grep -qsF "$PATH_LINE" "$RC"; then
+        echo "$RC already has: $PATH_LINE"
     else
-        run bash -c "printf '\n# Milo pipeline\n%s\n' \"\$1\" >> '$HOME/.bashrc'" _ "$PATH_LINE"
-        echo "~/.bashrc += $PATH_LINE"
+        run bash -c "printf '\n# Milo pipeline\n%s\n' \"\$1\" >> '$RC'" _ "$PATH_LINE"
+        echo "$RC += $PATH_LINE"
     fi
-    echo "Run 'source ~/.bashrc' or log back in."
-    if grep -qsE '^\s*(\[\[ \$-|case \$-)' "$HOME/.bashrc"; then
+    echo "Run 'source $RC' or log back in."
+    if grep -qsE '^\s*(\[\[ \$-|case \$-)' "$RC"; then
         echo
-        echo "NOTE: your ~/.bashrc returns early for non-interactive shells, and"
+        echo "NOTE: your $RC returns early for non-interactive shells, and"
         echo "      the line above was appended after that point. It applies when"
         echo "      you are typing at a prompt -- which is how this is meant to be"
         echo "      used -- but not to 'ssh host \"command\"' or scripts."
     fi
 else
-    echo "Add to ~/.bashrc (or re-run with --add-path):"
+    echo "Add to $RC (or re-run with --add-path):"
     echo "    $PATH_LINE"
+fi
+
+if [[ $SHARED -eq 1 ]]; then
+    echo
+    echo "Shared: making $BINDIR and $MILO_DIR group-readable"
+    # setgid on directories so anything added later keeps the group too.
+    run chmod -R go+rX "$BINDIR" "$MILO_DIR" \
+        || echo "  WARNING: could not relax permissions; others may not read it" >&2
+    run find "$BINDIR" "$MILO_DIR" -type d -exec chmod g+s {} + 2>/dev/null
+    parent="$(dirname "$BINDIR")"
+    [[ -x "$parent" && -r "$parent" ]] \
+        || echo "  WARNING: $parent is not traversable by others" >&2
 fi
 
 if [[ $STALE -eq 1 ]]; then

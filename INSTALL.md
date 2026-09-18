@@ -108,6 +108,16 @@ in a `bin` directory you already have — override them individually:
 `./install_milo.sh --help` lists all of them, and `--dry-run` shows you what
 any combination would do without writing anything.
 
+Two more, for cases that come up on shared machines:
+
+- `--tarball FILE` installs Milo from a tarball you already have, for a node
+  with no way out to GitHub. Download the release anywhere and hand it over.
+- `--shared` makes the install group-readable, for one person installing on
+  behalf of a lab. See the section below.
+
+If your login shell is tcsh rather than bash, `--add-path` writes a `setenv`
+line to `~/.cshrc` instead. It follows `$SHELL`.
+
 Changed your mind later? Re-run it with different paths, or edit `~/.milo.conf`
 directly — the tools read it every run. Re-running keeps what you set before
 and only changes what you ask for; a flag always beats what is recorded.
@@ -127,6 +137,8 @@ add if you want them:
 | `plot_python` | an interpreter that has `ase` and `matplotlib`, for the plots |
 | `array_limit` | most trajectories to run at once, if nothing else throttles you |
 | `uge_resources` | UGE node-pool policy, default `arch=intel*` |
+| `uge_pe` | UGE parallel environment, default `shared*` (sites also use `smp`, `openmp`) |
+| `uge_project` | UGE project to bill, if your site wants `-P` |
 
 It will not overwrite a file that differs from its copy without `--force`, and
 re-running it is safe — a second run reports that everything is already current.
@@ -151,6 +163,19 @@ not hung.
 
 If `runmilo.py` still comes back "not on PATH", the `PATH` line did not take.
 Check it is really in `~/.bashrc` (`tail ~/.bashrc`), then open a fresh login.
+
+## Installing once for a whole group
+
+One person installs somewhere everybody can read, and everybody else does
+nothing:
+
+    ./install_milo.sh --prefix /u/project/mygroup/milo --shared --add-path
+
+The tools land in `PREFIX/bin` and a copy of the config in `PREFIX/etc`. Anyone
+with `PREFIX/bin` on their `PATH` picks up that config automatically — they do
+not need their own, and they do not need write access to any of it. If someone
+wants different settings, their own `~/.milo.conf` takes precedence, and
+`MILO_CONF` beats both.
 
 ## Step 6 — one real trajectory, on the included example
 
@@ -262,7 +287,7 @@ Useful flags, all of which have sensible defaults:
 | `--traj N` | how many trajectories |
 | `-p` / `--cpus` | cpus per trajectory (8 is the standing choice) |
 | `-m` / `--mem` | GB given to Gaussian; the scheduler is asked for a little more |
-| `-t` | walltime; accepts `24`, `24h`, `90m` or `HH:MM:SS` |
+| `-t` | walltime; accepts `24`, `24h`, `90m` or `HH:MM:SS`. Default 24 h — past that, UGE needs `highp`, which only runs on nodes your group owns |
 | `--array-limit K` | at most K members running at once |
 | `--no-submit` | write the script, submit nothing |
 | `--dry-run` | print the script; write nothing, submit nothing |

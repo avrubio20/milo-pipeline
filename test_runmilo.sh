@@ -9,10 +9,21 @@ RAW="$TOOLS/runmilo.py"
 # the scheduler is pinned rather than auto-detected -- otherwise the suite
 # generates UGE scripts on a UGE machine and every member lands on index 1.
 R() { "$RAW" --scheduler slurm "$@"; }
+# Noted before the suite hides it below: this is the config of the installation
+# you are testing, and it is the best clue to where a real Milo lives.
+REAL_CONF="${MILO_CONF:-$HOME/.milo.conf}"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 # An installed config must not reach in and change what gets generated.
 export MILO_CONF="$T/absent.conf"
 cd "$T" || exit 1
+
+# --- stub g16: the generated script refuses to start without Gaussian on
+#     PATH, and these checks exercise the script, not Gaussian. Milo itself is
+#     what would call it, and Milo here is a stub that does not. ---
+mkdir -p fakebin
+printf '#!/bin/sh\nexit 0\n' > fakebin/g16
+chmod +x fakebin/g16
+export PATH="$T/fakebin:$PATH"
 
 # --- stub milo: writes <job_name>.xyz, where job_name comes from stdout fd,
 #     exactly like input_parser.py:266-271 ---
@@ -47,7 +58,7 @@ mkdir -p fakemilo/milo_1_0_3/tools
 # points at, then the install layout (this suite sits in PREFIX/bin, Milo goes
 # in PREFIX/opt), then the config, then the older conventions.
 inherited="${MILO_HOME:-}"
-configured=$(sed -n 's/^ *milo_home *= *//p' "$HOME/.milo.conf" 2>/dev/null)
+configured=$(sed -n 's/^ *milo_home *= *//p' "$REAL_CONF" 2>/dev/null)
 for cand in "$inherited" "$TOOLS/../opt/milo-1.0.3" "$configured" \
             "$HOME/Programs/milo" "$HOME/Programs/milo-1.0.3"; do
   [[ -n "$cand" ]] || continue
@@ -60,7 +71,7 @@ done
 # suite by its final line, so that line has to stand on its own.
 [[ -f fakemilo/milo_1_0_3/tools/setup_backward.py ]] || {
   echo "Looked in: \$MILO_HOME, $TOOLS/../opt/milo-1.0.3, milo_home in"
-  echo "~/.milo.conf, ~/Programs/milo and ~/Programs/milo-1.0.3."
+  echo "$REAL_CONF, ~/Programs/milo and ~/Programs/milo-1.0.3."
   echo "FAIL: no Milo to borrow setup_backward.py from -- install Milo first"
   exit 1; }
 export MILO_HOME="$T/fakemilo"
@@ -354,4 +365,12 @@ out=$(env SLURM_ARRAY_TASK_ID=9 SLURM_SUBMIT_DIR="$T" MILO_HOME="$T/not-milo" \
 [[ $rc -ne 0 ]] || fail "a missing Milo install still exited 0"
 grep -q "no Milo at $T/not-milo" <<<"$out" || fail "missing Milo not named: $out"
 
-echo "PASS: all 30 checks"
+# 31. no Gaussian on PATH is refused up front, not discovered mid-run.
+#     Member 12 has no results, so this gets past the skip guard.
+R DA_test.in --traj 12 --no-submit --force >/dev/null 2>&1 || fail "generation failed"
+out=$(env SLURM_ARRAY_TASK_ID=12 SLURM_SUBMIT_DIR="$T" MILO_HOME="$T/fakemilo" \
+      MILO_SCRATCH="$T/scratch" PATH="/usr/bin:/bin" bash DA_test_milo.sh 2>&1); rc=$?
+[[ $rc -ne 0 ]] || fail "script ran with no g16 on PATH"
+grep -q 'g16 is not on PATH' <<<"$out" || fail "no g16 error: $out"
+
+echo "PASS: all 31 checks"

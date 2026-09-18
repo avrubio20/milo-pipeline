@@ -92,17 +92,33 @@ PLOT = LOCAL / 'plot_traj.py'
 # editing that file rather than this one. Two things here are still specific:
 # the UGE directives follow Hoffman2's conventions, and --hoffman2/--expanse
 # name the clusters they submit to.
-CONFIG_PATH = Path(os.environ.get('MILO_CONF') or Path.home() / '.milo.conf')
+def _config_path() -> Path:
+    """MILO_CONF, else your own ~/.milo.conf, else the one beside the tools --
+    which is how a second person can use an install someone else made: the
+    tools are on their PATH, so the config that came with them is found too."""
+    if os.environ.get('MILO_CONF'):
+        return Path(os.environ['MILO_CONF'])
+    personal = Path.home() / '.milo.conf'
+    if personal.is_file():
+        return personal
+    shared = Path(__file__).resolve().parent.parent / 'etc/milo.conf'
+    return shared if shared.is_file() else personal
+
+
+CONFIG_PATH = _config_path()
 
 REMOTE_SCHEDULER = {'hoffman2': 'uge', 'expanse': 'slurm'}
 
 # Everything after the walltime on UGE's -l line is site policy: which node
 # pool, which architecture. `uge_resources = ...` in the config replaces it.
 UGE_RESOURCES = 'arch=intel*'
+# The parallel environment's name is a local choice: shared/smp/openmp/orte all
+# exist in the wild. `uge_pe` in the config names yours.
+UGE_PE = 'shared*'
 
 SCHEDULER_DEFAULTS = {
     'slurm': {'scratch': '${SLURM_TMPDIR:-/tmp}'},
-    'uge': {'scratch': '${TMPDIR:-$SCRATCH}'},
+    'uge': {'scratch': '${TMPDIR:-${SCRATCH:-/tmp}}'},
 }
 
 
@@ -114,8 +130,10 @@ def load_config(path: Path = None) -> dict:
     config, key = {}, None
     try:
         text = path.read_text()
-    except OSError:
+    except FileNotFoundError:
         return config
+    except OSError as exc:
+        sys.exit(f'ERROR: cannot read {path}: {exc}')
     for line in text.splitlines():
         if not line.strip():
             key = None          # a blank line ends the value above
@@ -147,6 +165,9 @@ def site_config(scheduler: str, config: dict = None) -> dict:
         # provide; `python = <path>` in the config pins a specific one.
         'python': config.get('python') or 'python3',
         'uge_resources': config.get('uge_resources') or UGE_RESOURCES,
+        'uge_pe': config.get('uge_pe') or UGE_PE,
+        # UGE spells the billing account -P, where Slurm spells it -A.
+        'uge_project': config.get('uge_project') or config.get('account') or '',
         'partition': config.get('partition') or None,
         'milo_home': os.environ.get('MILO_HOME') or config.get('milo_home', ''),
     }
@@ -177,13 +198,10 @@ SCHEDULERS = {
     },
 }
 
-# qsub is not on PATH in a non-interactive shell on Hoffman2 (runorca.py hits
-# the same thing), so the known locations are tried before giving up.
-QSUB_CANDIDATES = (
-    '/u/systems/UGE8.6.4/bin/lx-amd64/qsub',
-    '/u/local/bin/qsub',
-    '/usr/bin/qsub',
-)
+# qsub is not on PATH in a non-interactive shell (runorca.py hits the same
+# thing), so UGE's own layout is searched before giving up. $SGE_ROOT/bin/<arch>
+# is where every UGE installation puts it, whatever the version.
+QSUB_CANDIDATES = ('/u/local/bin/qsub', '/usr/bin/qsub')
 
 
 def submit_command(scheduler: str) -> str | None:
@@ -191,9 +209,14 @@ def submit_command(scheduler: str) -> str | None:
     found = shutil.which(name)
     if found:
         return found
-    if name == 'qsub':
-        return next((c for c in QSUB_CANDIDATES if Path(c).is_file()), None)
-    return None
+    if name != 'qsub':
+        return None
+    root = os.environ.get('SGE_ROOT')
+    if root:
+        found = next(Path(root).glob('bin/*/qsub'), None)
+        if found:
+            return str(found)
+    return next((c for c in QSUB_CANDIDATES if Path(c).is_file()), None)
 
 
 def hms_to_seconds(walltime: str) -> int:
@@ -203,7 +226,8 @@ def hms_to_seconds(walltime: str) -> int:
 
 def uge_directives(jobname: str, cpus: str, mem: str, walltime: str,
                    array: str, limit: int | None, constraint: str | None,
-                   resources: str = UGE_RESOURCES) -> str:
+                   resources: str = UGE_RESOURCES, pe: str = UGE_PE,
+                   project: str = '') -> str:
     """One combined -l line, times in seconds, h_data per slot and h_vmem per
     slot x slots. `highp` past 24 h asks for nodes your group owns, which is
     the only queue that runs that long."""
@@ -221,16 +245,22 @@ def uge_directives(jobname: str, cpus: str, mem: str, walltime: str,
              '#$ -j y', '#$ -notify', f'#$ -t {array}']
     if limit:
         lines.append(f'#$ -tc {limit}')
-    lines += [f'#$ -pe shared* {cpus}', '#$ -l ' + ','.join(limits)]
+    if project:
+        lines.append(f'#$ -P {project}')
+    lines += [f'#$ -pe {pe} {cpus}', '#$ -l ' + ','.join(limits)]
     return '\n'.join(lines)
 
 
-def detect_scheduler() -> str:
-    """Slurm or UGE? Ask the schedulers themselves rather than matching
-    hostnames: this is right on login and compute nodes alike."""
+def detect_scheduler() -> str | None:
+    """Slurm or UGE, by asking the schedulers themselves rather than matching
+    hostnames. None when neither is here: that is the case where a recorded
+    scheduler is worth trusting, and the only one -- a home directory shared
+    between two clusters would otherwise carry the wrong answer around."""
     if os.environ.get('SGE_ROOT') or submit_command('uge'):
         return 'uge'
-    return 'slurm'
+    if submit_command('slurm'):
+        return 'slurm'
+    return None
 
 
 def plot_interpreter(config: dict) -> str | None:
@@ -285,7 +315,9 @@ def parse_args():
     p.add_argument('--pairs', nargs='+', default=None,
                    help='1-based atom pairs to plot, e.g. 1-5 4-6 '
                         '(default: the pair named by `phase`)')
-    p.add_argument('-t', '--time', default='48:00:00',
+    # 24 h, not more: past that UGE needs `highp`, which only runs on nodes
+    # your group owns. Ask for longer when you know you have them.
+    p.add_argument('-t', '--time', default='24:00:00',
                    help='walltime: 24 or 24h (hours), 90m (minutes), or '
                         'HH:MM:SS (default: 48:00:00)')
     p.add_argument('--account', default=None, help='Slurm account (-A)')
@@ -311,7 +343,8 @@ def parse_args():
     elif args.wait:
         p.error('--wait only means anything with --hoffman2/--expanse.')
     if args.scheduler == 'auto':
-        args.scheduler = load_config().get('scheduler') or detect_scheduler()
+        args.scheduler = (detect_scheduler()
+                          or load_config().get('scheduler') or 'slurm')
     if args.rerun:
         args.force = True
     if args.backward and args.traj != 1:
@@ -496,7 +529,8 @@ def build_script(base: str, cpus: str, mem: str, pairs: list[str], walltime: str
             parts = [int(x) for x in array.split(',')]
             span = f'{min(parts)}-{max(parts)}'
         directives = uge_directives(jobname, cpus, mem, walltime, span, limit,
-                                    constraint, cfg['uge_resources'])
+                                    constraint, cfg['uge_resources'],
+                                    cfg['uge_pe'], cfg['uge_project'])
     else:
         directives = '\n'.join(
             [f'#SBATCH --job-name={jobname}',
@@ -646,6 +680,16 @@ trap _on_exit EXIT
 set +u
 {g16_init}
 set -u
+# Say which piece is missing here. Without this the job runs on until Milo
+# cannot import, or Gaussian is not found, several confusing lines later.
+command -v g16 >/dev/null || {{
+  echo "ERROR: g16 is not on PATH after the g16_setup lines in the Milo" \
+       "config. Fix g16_setup there, or load Gaussian before submitting." >&2
+  exit 1; }}
+command -v {python} >/dev/null || {{
+  echo "ERROR: {python} not found after setup; set the python key in the" \
+       "Milo config to an interpreter that exists here." >&2
+  exit 1; }}
 [[ -f "$MILO_HOME/milo_1_0_3/__main__.py" ]] || {{
   echo "ERROR: no Milo at $MILO_HOME. Set MILO_HOME, or install it with" \\
        "install_milo.sh." >&2; exit 1; }}
