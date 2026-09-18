@@ -39,4 +39,6 @@
 
 ## Deploy from the workstation
 
-    ./deploy.sh
+    clusters/expanse/deploy.sh
+
+Set `MILO_EXPANSE_HOST=<user>@login.expanse.sdsc.edu` first.

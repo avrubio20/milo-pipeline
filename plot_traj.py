@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Plot forming-bond distances (and SCF energy) against time for a Milo trajectory.
 
-    ./plot_traj.py results/DA_test50_full.xyz --pairs 1-5 4-6
-    ./plot_traj.py results/DA_test50.xyz --pairs 1-5 4-6 --energy results/DA_test50.out
+    ./plot_traj.py results/DA_run_001/DA_run_001.xyz --pairs 1-5 4-6
+    ./plot_traj.py results/DA_run_001/DA_run_001.xyz --pairs 1-5 4-6 \
+                   --energy results/DA_run_001/DA_run_001.out
+
+runmilo.py already plots each member as it finishes; this is for re-plotting.
 
 Atom indices are 1-based, matching Gaussian and the $molecule section.
 Frames carrying t_fs in the extxyz comment (written by the stitching step) are

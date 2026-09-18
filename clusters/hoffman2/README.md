@@ -53,4 +53,7 @@ trajectory, ~11 min queued in `pod_short.q`. Slower per trajectory than Expanse
 
 ## Deploy from the workstation
 
-    ./deploy.sh              # rsync the tools up, then run both suites there
+    clusters/hoffman2/deploy.sh    # rsync the tools up, then run both suites there
+
+The `hoffman2` name is an SSH alias; set `MILO_HOFFMAN2_HOST=<user>@hoffman2.idre.ucla.edu`
+if you have not configured one in `~/.ssh/config`.

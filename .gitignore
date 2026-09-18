@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 .claude-flow/
+joblogs/
+results/
+results.failed/
+results.partial/
+milo_example/
+*_milo.sh
+backward/

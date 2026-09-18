@@ -9,12 +9,17 @@ rendering each frame and calls bond/unbond, so the stick appears exactly when
 the bond forms.
 
     # headless, writes frames + mp4
-    pymol -cq milo_movie.py -- results/DA_prod100.xyz 1-5 4-6
+    pymol -cq milo_movie.py -- results/DA_run_001/DA_run_001.xyz 1-5 4-6
 
     # or inside a session, to set the scene up and look at it
     run milo_movie.py
-    miloscene results/DA_prod100.xyz, 1-5 4-6
+    miloscene results/DA_run_001/DA_run_001.xyz, 1-5 4-6
     smoothmd 5, adaptive          # UltimateSmoothMD6, if you want it
+
+Not installed by install_milo.sh and not part of the pipeline: it needs PyMOL,
+numpy, and a workstation-local style script (~/bin/pymol/arismol.py). It is
+here because trajectories are worth watching, not because anything depends on
+it.
 """
 import os
 import subprocess

@@ -193,10 +193,13 @@ node-local scratch, runs the trajectory there, copies the results back into
 job id, scratch path, seed and exit code. If a member fails, its working
 directory is preserved under `results.failed/` instead of being cleaned up.
 
-If you prefer to submit by hand, or want to edit the script first, you can:
+If you prefer to submit by hand, or want to edit the script first, use
+`--no-submit` — it writes the script and stops:
 
-    runmilo.py RUN.in --traj 100 --force    # writes it, submits it
-    qsub RUN_milo.sh                        # what runmilo.py just did for you
+    runmilo.py RUN.in --traj 100 --no-submit    # writes RUN_milo.sh, submits nothing
+    qsub RUN_milo.sh                            # what runmilo.py would have done
+
+Leave off `--no-submit` and it writes *and* submits, so do not do both.
 
 Useful flags, all of which have sensible defaults:
 
@@ -207,7 +210,8 @@ Useful flags, all of which have sensible defaults:
 | `-m` / `--mem` | GB given to Gaussian; the scheduler is asked for a little more |
 | `-t` | walltime; accepts `24`, `24h`, `90m` or `HH:MM:SS` |
 | `--array-limit K` | at most K members running at once |
-| `--dry-run` | print the script, submit nothing |
+| `--no-submit` | write the script, submit nothing |
+| `--dry-run` | print the script; write nothing, submit nothing |
 | `--site` | force a cluster preset instead of auto-detecting |
 
 ## When something goes wrong
@@ -234,6 +238,10 @@ Everything above is identical except:
 - `qsub script.sh` becomes `sbatch script.sh`
 - if your cluster bills to an allocation, set `export MILO_ACCOUNT=<account>`
   (or pass `--account`) so jobs are charged to the right one
+- `--check` tells you less there. The Gaussian and python checks in step 3 know
+  how Hoffman2 publishes those; on an unrecognised Slurm machine the check
+  confirms `sbatch`, the tools and Milo, and leaves Gaussian to you. Make sure
+  `g16` runs before you submit anything.
 
 `runmilo.py` works out which scheduler it is on by itself and writes the right
 kind of script; `--site` overrides it if you need to. Per-machine notes are in

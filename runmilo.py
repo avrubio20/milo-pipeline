@@ -12,7 +12,7 @@ independent trajectories without needing one input file each.
 
     runmilo.py DA_fwd.in                      # 1 trajectory -- the test run
     runmilo.py DA_fwd.in --traj 100           # 100 trajectories, one array
-    runmilo.py DA_fwd.in --traj 100 --force   # re-run members already finished
+    runmilo.py DA_fwd.in --traj 100 --force   # grow an ensemble; finished members kept
     runmilo.py DA_fwd.in --pairs 1-5 4-6      # plot both forming bonds
     runmilo.py DA_fwd.in --dry-run            # print the script, submit nothing
 
@@ -56,7 +56,8 @@ time; --account/--partition/--constraint override the preset.
 
     runmilo.py DA_fwd.in --site expanse --traj 100 --cpus 8 --array-limit 12
 
-Run it on a cluster from this directory, without logging in (see remotejob.py):
+Run it on a cluster from this directory, without logging in. This needs
+remotejob.py, which is a separate tool and not part of this repository:
 
     runmilo.py DA_fwd.in --traj 20 --hoffman2     # rsync up, qsub there
     rjob fetch                                    # results back here, remote copy deleted
@@ -294,7 +295,7 @@ def parse_args():
     p.add_argument('--partition', default=None, help='Slurm partition (-p)')
     p.add_argument('--constraint', default=None, help='Slurm constraint (-C)')
     p.add_argument('--dry-run', action='store_true',
-                   help='write the script and print it, but do not submit')
+                   help='print the script; write nothing, submit nothing')
     p.add_argument('--no-submit', action='store_true',
                    help='write the script but do not submit')
     p.add_argument('--force', action='store_true',

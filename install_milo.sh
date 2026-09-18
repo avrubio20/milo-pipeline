@@ -160,10 +160,11 @@ if [[ $EXAMPLE -eq 1 ]]; then
 fi
 
 LINE="export PATH=\"\$PATH:$SCRIPTS\""
-# MILO_HOME only needs saying when Milo is not where runmilo.py already looks.
-MH_LINE=""
-[[ "$MILO_HOME_PATH" != "$DEF_PROGRAMS/$MILO_DIRNAME" ]] \
-    && MH_LINE="export MILO_HOME=\"$MILO_HOME_PATH\""
+# MILO_HOME is always written, not only when the path is unusual: the site
+# presets in runmilo.py name a directory per cluster, and an install that lands
+# somewhere else -- ~/Programs/milo-1.0.3 where a preset says ~/Programs/milo --
+# would otherwise fail inside the job rather than here.
+MH_LINE="export MILO_HOME=\"$MILO_HOME_PATH\""
 
 echo
 if [[ ":$PATH:" == *":$SCRIPTS:"* && -z "$MH_LINE" ]]; then
