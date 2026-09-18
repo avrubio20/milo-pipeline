@@ -46,7 +46,7 @@ calculates, so all of it is fine to run here.
 
 ## Step 2 — get the code
 
-    git clone https://github.com/<your-account>/milo-pipeline.git
+    git clone https://github.com/avrubio20/milo-pipeline.git
     cd milo-pipeline
 
 `git clone` copies this repository into a folder called `milo-pipeline` in your
