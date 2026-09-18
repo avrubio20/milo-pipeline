@@ -43,29 +43,75 @@ def milo_home() -> Path:
 LIGHT = {'H', 'D'}  # skipped when auto-picking the phase pair
 
 
+SUMMARY = """Turn a Gaussian freq=hpmodes transition state into a Milo input.
+
+Works out the trajectory length, the reaction coordinate and which bonds to
+follow, then writes a .in file for runmilo.py. The bonds it finds are stamped
+into the file, so runmilo.py and milosum.py need no flags afterwards."""
+
+EXAMPLES = """examples:
+  prepmilo.py -i freq/TS.out -o RUN                  200 fs, 8 cpus, 12 GB
+  prepmilo.py -i freq/TS.out -o RUN --fs 500         a longer trajectory
+  prepmilo.py -i freq/TS.out -o RUN --phase 3-7      pick the bond yourself
+
+then:
+  runmilo.py RUN.in --traj 1                         one, to see it work
+  runmilo.py RUN.in --traj 100 --force               the ensemble
+"""
+
+
 def parse_args():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('-i', '--input', required=True,
-                   help='Gaussian freq=hpmodes output')
-    p.add_argument('-o', '--out', required=True,
-                   help='output name; "DA_fwd" and "DA_fwd.in" both work')
-    p.add_argument('--fs', type=float, default=200.0,
-                   help='trajectory length in femtoseconds (default: 200)')
-    p.add_argument('--step', type=float, default=1.0,
-                   help='step size in fs (default: 1.0)')
-    p.add_argument('-n', '--trajectories', type=int, default=None,
-                   help='fan out into N seeded copies via setup_ensemble.py')
-    p.add_argument('--phase', default='auto',
-                   help='atom pair as i-j, 1-based (default: auto — the heavy-atom '
-                        'pair that moves most along the imaginary mode)')
-    p.add_argument('--direction', default='bring_together',
-                   choices=['bring_together', 'push_apart'],
-                   help='direction along the imaginary mode (default: bring_together)')
-    p.add_argument('--temp', type=float, default=298.15, help='kelvin (default: 298.15)')
-    p.add_argument('-p', '--processors', type=int, default=24)
-    p.add_argument('-m', '--memory', type=int, default=48, help='GB for Gaussian %%mem')
-    p.add_argument('--force', action='store_true', help='overwrite an existing output')
+    p = argparse.ArgumentParser(
+        description=SUMMARY, epilog=EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    io = p.add_argument_group('input and output')
+    io.add_argument('-i', '--input', required=True,
+                    help='the Gaussian freq=hpmodes output for your transition '
+                         'state. Ordinary freq output will not do: Milo needs '
+                         'the high-precision normal modes.')
+    io.add_argument('-o', '--out', required=True,
+                    help='name for the Milo input; "RUN" and "RUN.in" both work')
+    io.add_argument('--force', action='store_true',
+                    help='replace an existing output instead of refusing')
+
+    traj = p.add_argument_group('the trajectory')
+    traj.add_argument('--fs', type=float, default=200.0,
+                      help='length in femtoseconds (default: 200). Long enough '
+                           'that the trajectory commits to products or back to '
+                           'reactants.')
+    traj.add_argument('--step', type=float, default=1.0,
+                      help='step size in fs (default: 1.0)')
+    traj.add_argument('--phase', default='auto',
+                      help='the atom pair that defines the reaction coordinate, '
+                           'as i-j, 1-based. Default auto: the heavy-atom pair '
+                           'moving most along the imaginary mode. Override it '
+                           'when that pair is not the bond you care about -- the '
+                           'ranking is printed either way, so you can check.')
+    traj.add_argument('--direction', default='bring_together',
+                      choices=['bring_together', 'push_apart'],
+                      help='which way along the imaginary mode to start '
+                           '(default: bring_together)')
+    traj.add_argument('--temp', type=float, default=298.15,
+                      help='temperature in kelvin for the initial conditions '
+                           '(default: 298.15)')
+
+    res = p.add_argument_group('resources, written into the input file')
+    res.add_argument('-p', '--processors', '--cpus', type=int, default=8,
+                     help='cpus per trajectory (default: 8). Measured on a '
+                          '16-atom system: 8 is near the knee, and 24 is slower '
+                          'than 16. Bigger systems use more cores better.')
+    res.add_argument('-m', '--memory', '--mem', type=int, default=12,
+                     help='GB for Gaussian %%mem (default: 12). runmilo.py asks '
+                          'the scheduler for a little more than this.')
+
+    legacy = p.add_argument_group('legacy')
+    legacy.add_argument('-n', '--trajectories', type=int, default=None,
+                        help="Milo's own way of making an ensemble: N copies, "
+                             'each with a seed written in. runmilo.py does not '
+                             'want these -- it runs one input as an array and '
+                             'each member seeds itself. Here because it is '
+                             "Milo's documented idiom, not because you need it.")
     return p.parse_args()
 
 

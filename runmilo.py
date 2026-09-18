@@ -2,11 +2,11 @@
 """
 runmilo.py
 
-Submit a Milo trajectory ensemble as a single Slurm job array, with
-post-processing.
+Submit a Milo trajectory ensemble as a single job array -- Slurm or UGE -- and
+summarise it when it lands.
 
-Writes <base>_milo.sh next to <base>.in and submits it as an array of --traj
-members. Every member runs the *same* input file; Milo draws its own 40-bit
+Writes <base>_milo.sh in the current directory and submits it as an array of
+--traj members. Every member runs the *same* input file; Milo draws its own 40-bit
 seed from os.urandom at run time and records it in the .out, so the members are
 independent trajectories without needing one input file each.
 
@@ -263,64 +263,103 @@ def plot_interpreter(config: dict) -> str | None:
     return None
 
 
+SUMMARY = """Run a Milo trajectory ensemble as one job array, on Slurm or UGE.
+
+Every member runs the same input file. Milo draws its own seed at run time and
+records it, which is what makes them independent trajectories rather than N
+copies of one. A single trajectory is member 001 of the same ensemble, so the
+run you use to check a system and the run that produces your results are the
+same code path.
+
+Paths, the g16 setup and the account come from the config install_milo.sh
+writes. Results land in results/<base>_NNN/, failures in results.failed/."""
+
+EXAMPLES = """examples:
+  runmilo.py RUN.in                       one trajectory, to see it work
+  runmilo.py RUN.in --traj 100 --force    grow it to 100; member 001 is kept
+  runmilo.py RUN.in --traj 100 --dry-run  print the script, submit nothing
+  runmilo.py RUN.in --backward            the reverse half of each finished one
+  milosum.py RUN.in                       what happened
+"""
+
+
 def parse_args():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('inputs', nargs='+', help='Milo input files (.in)')
-    p.add_argument('--scheduler', choices=['slurm', 'uge', 'auto'], default='auto',
-                   help='which scheduler to write directives for. Default auto: '
-                        'UGE if this machine has it, else Slurm. Paths and the '
-                        f'g16 setup come from {CONFIG_PATH}.')
-    p.add_argument('--hoffman2', dest='remote', action='store_const',
-                   const='hoffman2',
-                   help='build for Hoffman2 AND run it there: rsync this '
-                        'directory up, qsub, `rjob fetch` brings the results '
-                        'back into it.')
-    p.add_argument('--expanse', dest='remote', action='store_const',
-                   const='expanse', help='same, on Expanse.')
-    p.add_argument('--wait', action='store_true',
-                   help='with --hoffman2/--expanse: block until the job '
-                        'finishes, then fetch.')
-    p.add_argument('-n', '--traj', type=int, default=1,
-                   help='number of trajectories in the ensemble (default: 1)')
-    p.add_argument('-p', '--cpus', type=int, default=None,
-                   help='override `processors` from the $job section. Rewrites '
-                        'the scratch copy of the input only, so one .in serves '
-                        'both a fat quick test and a narrow parallel ensemble.')
-    p.add_argument('-m', '--mem', type=int, default=None,
-                   help='override `memory` (GB) from the $job section')
-    p.add_argument('--array-limit', type=int, default=None,
-                   help='max array members running at once (Slurm %%K). Set it '
-                        'whenever --cpus is small enough that many members fit '
-                        'on a node; locally it is the only real throttle, since '
-                        '--mem is advisory there (TaskPlugin=task/none).')
-    p.add_argument('--backward', action='store_true',
-                   help='run the reverse half of each finished forward member: '
-                        'flip the phase and replay that member\'s seed. The '
-                        'array is sized from what is actually in results/, so '
-                        '--traj does not apply.')
-    p.add_argument('--pairs', nargs='+', default=None,
-                   help='1-based atom pairs to plot, e.g. 1-5 4-6 '
-                        '(default: the pair named by `phase`)')
-    # Past 24 h, UGE needs `highp` -- nodes your group owns.
-    p.add_argument('-t', '--time', default='24:00:00',
-                   help='walltime: 24 or 24h (hours), 90m (minutes), or '
-                        'HH:MM:SS (default: 48:00:00)')
-    p.add_argument('--account', default=None, help='Slurm account (-A)')
-    p.add_argument('--partition', default=None, help='Slurm partition (-p)')
-    p.add_argument('--constraint', default=None, help='Slurm constraint (-C)')
-    p.add_argument('--dry-run', action='store_true',
-                   help='print the script; write nothing, submit nothing')
-    p.add_argument('--no-submit', action='store_true',
-                   help='write the script but do not submit')
-    p.add_argument('--force', action='store_true',
-                   help='overwrite an existing <base>_milo.sh (does NOT touch '
-                        'finished results)')
-    p.add_argument('--rerun', action='store_true',
-                   help='also re-run ensemble members that already have '
-                        'results, replacing them. Implies --force. This is the '
-                        'destructive one: regenerating a script and discarding '
-                        'finished trajectories are separated on purpose.')
+    p = argparse.ArgumentParser(
+        description=SUMMARY, epilog=EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    ens = p.add_argument_group('the ensemble')
+    ens.add_argument('inputs', nargs='+', help='Milo input files (.in)')
+    ens.add_argument('-n', '--traj', type=int, default=1,
+                     help='how many trajectories (default: 1)')
+    ens.add_argument('--backward', action='store_true',
+                     help='run the reverse half of each finished forward '
+                          'member: same seed, phase flipped. Forward NNN and '
+                          'backward NNN are two halves of one sample, not two '
+                          'samples. Sized from what is in results/, so --traj '
+                          'does not apply.')
+    ens.add_argument('--pairs', nargs='+', default=None,
+                     help='atom pairs to plot and classify, 1-based, e.g. '
+                          '1-5 4-6. Default: the pairs prepmilo.py stamped into '
+                          'the input, so you rarely need this.')
+
+    res = p.add_argument_group('resources')
+    res.add_argument('-p', '--cpus', type=int, default=None,
+                     help='cpus per trajectory. Default: whatever `processors` '
+                          'says in the input file, so the scheduler and '
+                          'Gaussian cannot disagree.')
+    res.add_argument('-m', '--mem', type=int, default=None,
+                     help='GB for Gaussian. Default: `memory` from the input '
+                          'file. The scheduler is asked for a little more.')
+    res.add_argument('-t', '--time', default='24:00:00',
+                     help='walltime: 24 or 24h (hours), 90m (minutes), or '
+                          'HH:MM:SS (default: 24:00:00). Past 24 h, UGE needs '
+                          'highp -- nodes your group owns.')
+    res.add_argument('--array-limit', type=int, default=None,
+                     help='most members allowed to run at once (Slurm %%K, UGE '
+                          '-tc). Worth setting in a shared queue: 100 members '
+                          'at 8 cpus is 800 cores.')
+
+    sch = p.add_argument_group('scheduler')
+    sch.add_argument('--scheduler', choices=['slurm', 'uge', 'auto'], default='auto',
+                     help='which directives to write. Default auto: UGE if this '
+                          'machine has it, else Slurm. --hoffman2/--expanse set '
+                          'it for you.')
+    sch.add_argument('--account', default=None,
+                     help='account to bill (Slurm -A, UGE -P). Normally set '
+                          'once in the config, not per run.')
+    sch.add_argument('--partition', default=None, help='Slurm partition (-p)')
+    sch.add_argument('--constraint', default=None,
+                     help='node type (Slurm -C, UGE arch=)')
+
+    rem = p.add_argument_group('running on another machine')
+    where = rem.add_mutually_exclusive_group()
+    where.add_argument('--hoffman2', dest='remote', action='store_const',
+                       const='hoffman2',
+                       help='build for Hoffman2 and run it there: rsync this '
+                            'directory up, submit, and `rjob fetch` brings the '
+                            'results back. Needs remotejob.py, which is a '
+                            'separate tool.')
+    where.add_argument('--expanse', dest='remote', action='store_const',
+                       const='expanse', help='the same, on Expanse')
+    rem.add_argument('--wait', action='store_true',
+                     help='with --hoffman2/--expanse: block until the job '
+                          'finishes, then fetch. Without it, fetch later with '
+                          '`rjob fetch`.')
+
+    out = p.add_argument_group('what gets written, and what gets replaced')
+    out.add_argument('--dry-run', action='store_true',
+                     help='print the script; write nothing, submit nothing')
+    out.add_argument('--no-submit', action='store_true',
+                     help='write the script but do not submit it, for when you '
+                          'want to read or edit it first')
+    out.add_argument('--force', action='store_true',
+                     help='regenerate <base>_milo.sh and grow the ensemble. '
+                          'Finished trajectories are kept, not re-run.')
+    out.add_argument('--rerun', action='store_true',
+                     help='also re-run members that already finished, throwing '
+                          'those results away. Implies --force. This is the '
+                          'destructive one.')
     args = p.parse_args()
     args.time = walltime(args.time, p)
     # --hoffman2/--expanse mean "build for it AND run it there" -- one flag.
