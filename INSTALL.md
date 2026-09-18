@@ -314,6 +314,41 @@ document you will read after this one.
 | ensemble | all the trajectories of one run, treated as one statistical sample |
 | branching ratio | what fraction of trajectories ended as product rather than reactant |
 
+## What the two test suites are
+
+`--check` runs two suites that came with the install. They are not checking
+your machine — they are checking that the tools themselves still behave, before
+you trust them with a week of compute. Both run in a temporary directory, need
+no scheduler, and submit nothing.
+
+**`test_runmilo.sh` (31 checks)** exercises the submission script `runmilo.py`
+writes, by running it against a stub Milo that produces fake output instantly.
+It checks the things that would quietly cost you results: that a finished
+trajectory is never overwritten without `--rerun`, that each ensemble member
+gets its own seed and its own directory, that a failed member's files are
+archived rather than deleted, that results are staged back from scratch
+properly, that UGE and Slurm each get the right directives, and that a job with
+no Gaussian or no Milo stops with a clear message instead of failing ten
+minutes in.
+
+**`test_milosum.sh` (19 checks)** builds synthetic ensembles whose answers are
+known in advance and checks that `milosum.py` reports them: trajectories
+classified as product, reactant, stepwise or undecided; forward and reverse
+halves paired by seed rather than by filename; and the refusal to quote a
+branching ratio when too few members finished, which is the number in this
+pipeline that must never be quietly wrong.
+
+If either fails, the tools are suspect on this machine — that is worth knowing
+before a hundred jobs, not after.
+
+**Why they can pass while `runmilo.py not on PATH` fails.** The suites do not
+use your `PATH`. Each one runs the tool sitting next to it, by full path, so it
+tests the copy that was just installed. `PATH` is only about whether *you* can
+type `runmilo.py` without spelling out the directory. Seeing four `not on PATH`
+failures and two passing suites means exactly one thing: the tools installed
+correctly and work, and your shell has not been told where they are. Re-run
+with `--add-path`, then `source ~/.bashrc`.
+
 ## Reading `--check`, line by line
 
 Every line comes back `ok`, `note` or `FAIL`. A `note` is information, not a
@@ -344,9 +379,12 @@ in order of likelihood:
 3. *The setup lines are wrong for this machine.* Look at `g16_setup` in your
    config. Run those lines by hand; whatever error you get is the real one.
 
-**`<tool> not on PATH (add <bindir> to it)`** — expected before installing, and
-after installing means the `PATH` line has not taken. Either you have not run
-`source ~/.bashrc`, or `--add-path` wrote to a file your shell does not read.
+**`<tool> not on PATH (add <bindir> to it)`** — the tools are installed, but
+your shell cannot find them. This is what you get when you install without
+`--add-path`: the installer prints the line to add and leaves your shell alone.
+Either re-run with `--add-path`, or paste that line into `~/.bashrc` yourself.
+Then `source ~/.bashrc`. It is not a sign that anything installed wrong — the
+suites run the tools by full path and will pass regardless.
 Check with `tail ~/.bashrc` (or `~/.cshrc` under tcsh), then open a fresh login.
 If it works when you are logged in but not through `ssh host "command"`, that is
 expected: most `.bashrc` files stop early for non-interactive shells.
