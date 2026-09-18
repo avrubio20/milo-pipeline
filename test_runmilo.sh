@@ -56,11 +56,12 @@ for cand in "$inherited" "$TOOLS/../opt/milo-1.0.3" "$configured" \
     break
   fi
 done
+# The detail goes first and the verdict last: install_milo.sh --check reports a
+# suite by its final line, so that line has to stand on its own.
 [[ -f fakemilo/milo_1_0_3/tools/setup_backward.py ]] || {
-  echo "FAIL: no Milo install found to borrow setup_backward.py from."
-  echo "      Looked in: \$MILO_HOME, $TOOLS/../opt/milo-1.0.3, milo_home in"
-  echo "      ~/.milo.conf, ~/Programs/milo{,-1.0.3}. Install Milo, or export"
-  echo "      MILO_HOME, before running this suite."
+  echo "Looked in: \$MILO_HOME, $TOOLS/../opt/milo-1.0.3, milo_home in"
+  echo "~/.milo.conf, ~/Programs/milo and ~/Programs/milo-1.0.3."
+  echo "FAIL: no Milo to borrow setup_backward.py from -- install Milo first"
   exit 1; }
 export MILO_HOME="$T/fakemilo"
 # Self-contained fixture: runmilo.py only ever reads the $job section and the
