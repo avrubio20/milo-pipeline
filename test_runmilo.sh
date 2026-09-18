@@ -43,17 +43,25 @@ touch fakemilo/milo_1_0_3/__init__.py
 # needs the real one. Where Milo lives is the installation's business, so ask
 # the config before guessing; MILO_HOME then serves generation and execution.
 mkdir -p fakemilo/milo_1_0_3/tools
-installed=$(sed -n 's/^ *milo_home *= *//p' "${MILO_CONF_REAL:-$HOME/.milo.conf}" 2>/dev/null)
-for cand in "$installed" "$HOME/milo/opt/milo-1.0.3" "$HOME/Programs/milo" \
-            "$HOME/Programs/milo-1.0.3"; do
+# Where a real Milo might be, most specific first: what the caller already
+# points at, then the install layout (this suite sits in PREFIX/bin, Milo goes
+# in PREFIX/opt), then the config, then the older conventions.
+inherited="${MILO_HOME:-}"
+configured=$(sed -n 's/^ *milo_home *= *//p' "$HOME/.milo.conf" 2>/dev/null)
+for cand in "$inherited" "$TOOLS/../opt/milo-1.0.3" "$configured" \
+            "$HOME/Programs/milo" "$HOME/Programs/milo-1.0.3"; do
   [[ -n "$cand" ]] || continue
   if [[ -f "$cand/milo_1_0_3/tools/setup_backward.py" ]]; then
     cp "$cand/milo_1_0_3/tools/setup_backward.py" fakemilo/milo_1_0_3/tools/
     break
   fi
 done
-[[ -f fakemilo/milo_1_0_3/tools/setup_backward.py ]] \
-  || { echo "FAIL: no Milo install found to borrow setup_backward.py from"; exit 1; }
+[[ -f fakemilo/milo_1_0_3/tools/setup_backward.py ]] || {
+  echo "FAIL: no Milo install found to borrow setup_backward.py from."
+  echo "      Looked in: \$MILO_HOME, $TOOLS/../opt/milo-1.0.3, milo_home in"
+  echo "      ~/.milo.conf, ~/Programs/milo{,-1.0.3}. Install Milo, or export"
+  echo "      MILO_HOME, before running this suite."
+  exit 1; }
 export MILO_HOME="$T/fakemilo"
 # Self-contained fixture: runmilo.py only ever reads the $job section and the
 # stub Milo ignores the rest, so the suite runs anywhere without a fixture file

@@ -54,18 +54,27 @@ module load python/3.9.6'
 }
 detect_host
 
-PREFIX="$HOME/milo"; BINDIR=""; MILO_DIR=""; SCRATCH=""; ACCOUNT=""
+DEFAULT_PREFIX="$HOME/milo"
+PREFIX=""; BINDIR=""; MILO_DIR=""; SCRATCH=""; ACCOUNT=""
 CONFIG="$HOME/.milo.conf"
 DRY=0; FORCE=0; CHECK=0; ADDPATH=0; EXAMPLE=0
 
+# Exits rather than returns: a value swallowed by the next flag is worse than
+# stopping, and this cannot run in a subshell or the exit would be lost.
+argval() {
+    [[ -n "${2:-}" && "${2:-}" != --* ]] && return 0
+    echo "ERROR: $1 needs a value" >&2
+    exit 1
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --prefix)   PREFIX="$2";   shift 2;;
-        --bindir)   BINDIR="$2";   shift 2;;
-        --milo-dir) MILO_DIR="$2"; shift 2;;
-        --scratch)  SCRATCH="$2";  shift 2;;
-        --account)  ACCOUNT="$2";  shift 2;;
-        --config)   CONFIG="$2";   shift 2;;
+        --prefix)   argval "$1" "${2:-}"; PREFIX="$2";   shift 2;;
+        --bindir)   argval "$1" "${2:-}"; BINDIR="$2";   shift 2;;
+        --milo-dir) argval "$1" "${2:-}"; MILO_DIR="$2"; shift 2;;
+        --scratch)  argval "$1" "${2:-}"; SCRATCH="$2";  shift 2;;
+        --account)  argval "$1" "${2:-}"; ACCOUNT="$2";  shift 2;;
+        --config)   argval "$1" "${2:-}"; CONFIG="$2";   shift 2;;
         --check)    CHECK=1;    shift;;
         --example)  EXAMPLE=1;  shift;;
         --add-path) ADDPATH=1;  shift;;
@@ -77,35 +86,38 @@ while [[ $# -gt 0 ]]; do
 done
 
 expand() { echo "${1/#\~/$HOME}"; }
-PREFIX="$(expand "$PREFIX")"
-BINDIR="$(expand "${BINDIR:-$PREFIX/bin}")"
-MILO_DIR="$(expand "${MILO_DIR:-$PREFIX/opt/$MILO_VERSION}")"
 CONFIG="$(expand "$CONFIG")"
-SCRATCH="${SCRATCH:-$DEF_SCRATCH}"
 
 run() { if [[ $DRY -eq 1 ]]; then echo "  would: $*"; else "$@"; fi; }
 ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*"; FAILED=1; }
 note() { echo "  note  $*"; }
 
-# An installed config wins over the defaults above, so --check and a second
-# --example look at the installation that exists rather than the one that would
-# exist. Explicit flags still win over both: they are re-parsed after this.
-if [[ -f "$CONFIG" ]]; then
-    while IFS='=' read -r key value; do
-        case "${key// /}" in
-            bindir)    BINDIR="${value# }";;
-            milo_home) MILO_DIR="${value# }";;
-            scheduler) SCHEDULER="${value// /}";;
-        esac
-    done < "$CONFIG"
-    # g16_setup spans several lines, its continuations indented, so --check
-    # tests the setup you actually installed rather than the detected guess.
-    installed_g16=$(awk '/^g16_setup *=/ {sub(/^g16_setup *= */, ""); print; got=1; next}
-                         got && /^[[:space:]]/ {sub(/^[[:space:]]+/, ""); print; next}
-                         got {exit}' "$CONFIG")
-    [[ -n "$installed_g16" ]] && G16_SETUP="$installed_g16"
-fi
+# What an existing install already chose. It fills in what you did not ask for
+# on this run -- so re-running without --scratch keeps the scratch you set --
+# and loses to any flag you did pass.
+cfg() { [[ -f "$CONFIG" ]] && sed -n "s/^ *$1 *= *//p" "$CONFIG" | head -1; }
+CFG_BINDIR="$(cfg bindir)"; CFG_MILO="$(cfg milo_home)"
+CFG_SCRATCH="$(cfg scratch)"; CFG_ACCOUNT="$(cfg account)"
+CFG_SCHEDULER="$(cfg scheduler)"
+# g16_setup is several lines, its continuations indented, and a blank line ends
+# it -- the same shape runmilo.py reads, so --check tests what jobs will do.
+CFG_G16=$([[ -f "$CONFIG" ]] && awk '
+    /^g16_setup *=/ { sub(/^g16_setup *= */, ""); print; found=1; next }
+    found && /^[[:space:]]*$/ { exit }
+    found && /^[[:space:]]/ { sub(/^[[:space:]]+/, ""); print; next }
+    found { exit }' "$CONFIG")
+
+# --prefix moves everything under it, so it beats a recorded bindir; --bindir
+# and --milo-dir beat both.
+[[ -n "$PREFIX" && -z "$BINDIR" ]]   && BINDIR="$(expand "$PREFIX")/bin"
+[[ -n "$PREFIX" && -z "$MILO_DIR" ]] && MILO_DIR="$(expand "$PREFIX")/opt/$MILO_VERSION"
+BINDIR="$(expand "${BINDIR:-${CFG_BINDIR:-$DEFAULT_PREFIX/bin}}")"
+MILO_DIR="$(expand "${MILO_DIR:-${CFG_MILO:-$DEFAULT_PREFIX/opt/$MILO_VERSION}}")"
+SCRATCH="${SCRATCH:-${CFG_SCRATCH:-$DEF_SCRATCH}}"
+ACCOUNT="${ACCOUNT:-$CFG_ACCOUNT}"
+SCHEDULER="${CFG_SCHEDULER:-$SCHEDULER}"
+[[ -n "$CFG_G16" ]] && G16_SETUP="$CFG_G16"
 
 if [[ $CHECK -eq 1 ]]; then
     echo "Environment check ($HOST)"
@@ -199,15 +211,17 @@ else
 fi
 
 echo "Tools: $BINDIR"
-run mkdir -p "$BINDIR"
+run mkdir -p "$BINDIR" || { echo "ERROR: cannot create $BINDIR" >&2; exit 1; }
+STALE=0
 for f in "${TOOLS[@]}" "${SUITES[@]}"; do
     [[ -f "$SRC/$f" ]] || { echo "  ERROR: $SRC/$f is missing" >&2; exit 1; }
     if [[ -e "$BINDIR/$f" && $FORCE -eq 0 ]] && ! cmp -s "$SRC/$f" "$BINDIR/$f"; then
         echo "  $f DIFFERS from the copy here -- --force to replace"
+        STALE=1
         continue
     fi
-    run cp "$SRC/$f" "$BINDIR/$f"
-    run chmod +x "$BINDIR/$f"
+    run cp "$SRC/$f" "$BINDIR/$f" || { echo "ERROR: cannot write $BINDIR/$f" >&2; exit 1; }
+    run chmod +x "$BINDIR/$f" || exit 1
     echo "  $f"
 done
 
@@ -215,6 +229,8 @@ echo "Config: $CONFIG"
 if [[ $DRY -eq 1 ]]; then
     echo "  would: record bindir, milo_home, scratch, scheduler, g16 setup"
 else
+    mkdir -p "$(dirname "$CONFIG")" \
+        || { echo "ERROR: cannot create $(dirname "$CONFIG")" >&2; exit 1; }
     cat > "$CONFIG" <<CONF
 # Milo pipeline. Written by install_milo.sh on $(date +%F).
 # Re-run it to change these, or edit them here -- the tools read this file.
@@ -227,6 +243,7 @@ account   = $ACCOUNT
 # Shell lines that make g16 (and python) runnable inside a job.
 g16_setup = $(echo "$G16_SETUP" | sed '2,$s/^/            /')
 CONF
+    [[ -s "$CONFIG" ]] || { echo "ERROR: could not write $CONFIG" >&2; exit 1; }
     echo "  recorded; MILO_CONF overrides the location"
 fi
 
@@ -259,6 +276,15 @@ elif [[ $ADDPATH -eq 1 ]]; then
 else
     echo "Add to ~/.bashrc (or re-run with --add-path):"
     echo "    $PATH_LINE"
+fi
+
+if [[ $STALE -eq 1 ]]; then
+    cat >&2 <<STALE_MSG
+
+Some tools already installed differ from the ones here and were left alone, so
+$BINDIR is now a mix of two versions. Re-run with --force to replace them.
+STALE_MSG
+    exit 1
 fi
 
 cat <<NEXT

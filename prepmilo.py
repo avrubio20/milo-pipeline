@@ -19,6 +19,7 @@ setup_ensemble.py. Trajectory length is --fs.
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import re
 import subprocess
@@ -26,8 +27,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-def _milo_home() -> Path:
-    """Where Milo lives, from the same config runmilo.py reads."""
+@functools.lru_cache(maxsize=1)
+def milo_home() -> Path:
+    """Where Milo lives, from the same config runmilo.py reads. Called on
+    first use, not at import, so --help works without an installation."""
     from runmilo import CONFIG_PATH, load_config     # installed side by side
     home = os.environ.get('MILO_HOME') or load_config().get('milo_home')
     if not home:
@@ -37,8 +40,6 @@ def _milo_home() -> Path:
     return Path(os.path.expandvars(home))
 
 
-MILO = _milo_home()
-TOOLS = MILO / 'milo_1_0_3/tools'
 LIGHT = {'H', 'D'}  # skipped when auto-picking the phase pair
 
 
@@ -73,9 +74,9 @@ def run_parse_frequencies(freq_out: Path) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp) / 'raw.in'
         r = subprocess.run(
-            [sys.executable, str(TOOLS / 'parse_frequencies.py'),
+            [sys.executable, str(milo_home() / 'milo_1_0_3/tools' / 'parse_frequencies.py'),
              str(freq_out), str(dest)],
-            capture_output=True, text=True, env={'PYTHONPATH': str(MILO), 'PATH': ''},
+            capture_output=True, text=True, env={'PYTHONPATH': str(milo_home()), 'PATH': ''},
         )
         if r.returncode != 0:
             msg = (r.stderr.strip().splitlines() or ['unknown error'])[-1]
@@ -193,9 +194,9 @@ def main():
 
     if args.trajectories:
         r = subprocess.run(
-            [sys.executable, str(TOOLS / 'setup_ensemble.py'),
+            [sys.executable, str(milo_home() / 'milo_1_0_3/tools' / 'setup_ensemble.py'),
              '-n', str(args.trajectories), '-f', str(out), '--no_script'],
-            capture_output=True, text=True, env={'PYTHONPATH': str(MILO), 'PATH': ''},
+            capture_output=True, text=True, env={'PYTHONPATH': str(milo_home()), 'PATH': ''},
         )
         if r.returncode != 0:
             sys.exit(f'ERROR: setup_ensemble.py failed:\n{r.stderr.strip()}')

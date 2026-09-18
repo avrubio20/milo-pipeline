@@ -109,7 +109,24 @@ in a `bin` directory you already have — override them individually:
 any combination would do without writing anything.
 
 Changed your mind later? Re-run it with different paths, or edit `~/.milo.conf`
-directly — it is six lines of `key = value` and the tools read it every run.
+directly — the tools read it every run. Re-running keeps what you set before
+and only changes what you ask for; a flag always beats what is recorded.
+
+These are the keys. The installer fills in the first six; the rest are yours to
+add if you want them:
+
+| key | means |
+|---|---|
+| `bindir` | where the four tools are |
+| `milo_home` | where Milo itself is |
+| `scratch` | fast temporary space a job should use |
+| `scheduler` | `uge` or `slurm` |
+| `account` | account to bill, if your cluster needs one |
+| `g16_setup` | the shell lines that make `g16` runnable in a job |
+| `python` | a specific interpreter for jobs, instead of `python3` |
+| `plot_python` | an interpreter that has `ase` and `matplotlib`, for the plots |
+| `array_limit` | most trajectories to run at once, if nothing else throttles you |
+| `uge_resources` | UGE node-pool policy, default `arch=intel*` |
 
 It will not overwrite a file that differs from its copy without `--force`, and
 re-running it is safe — a second run reports that everything is already current.

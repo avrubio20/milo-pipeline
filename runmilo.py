@@ -86,14 +86,19 @@ PLOT = LOCAL / 'plot_traj.py'
 # one explicitly; otherwise this interpreter and plain python3 are tried.
 
 
-# What a site actually needs is three things: how g16 gets onto PATH, where
-# node-local scratch lives, and whether the scheduler wants an account. All
-# three are recorded by install_milo.sh in the config file below, so no machine
-# is named in this file and nothing has to be edited to add one.
+# What a site needs is three things: how g16 gets onto PATH, where node-local
+# scratch lives, and whether the scheduler wants an account. install_milo.sh
+# records all three in the config below, so installing somewhere new means
+# editing that file rather than this one. Two things here are still specific:
+# the UGE directives follow Hoffman2's conventions, and --hoffman2/--expanse
+# name the clusters they submit to.
 CONFIG_PATH = Path(os.environ.get('MILO_CONF') or Path.home() / '.milo.conf')
 
-# --hoffman2/--expanse pick where the job goes; the scheduler follows from it.
 REMOTE_SCHEDULER = {'hoffman2': 'uge', 'expanse': 'slurm'}
+
+# Everything after the walltime on UGE's -l line is site policy: which node
+# pool, which architecture. `uge_resources = ...` in the config replaces it.
+UGE_RESOURCES = 'arch=intel*'
 
 SCHEDULER_DEFAULTS = {
     'slurm': {'scratch': '${SLURM_TMPDIR:-/tmp}'},
@@ -112,7 +117,10 @@ def load_config(path: Path = None) -> dict:
     except OSError:
         return config
     for line in text.splitlines():
-        if not line.strip() or line.lstrip().startswith('#'):
+        if not line.strip():
+            key = None          # a blank line ends the value above
+            continue
+        if line.lstrip().startswith('#'):
             continue
         if line[0].isspace() and key:
             config[key] += '\n' + line.strip()
@@ -138,6 +146,7 @@ def site_config(scheduler: str, config: dict = None) -> dict:
         # python3 inside the job, which the g16 setup lines are expected to
         # provide; `python = <path>` in the config pins a specific one.
         'python': config.get('python') or 'python3',
+        'uge_resources': config.get('uge_resources') or UGE_RESOURCES,
         'partition': config.get('partition') or None,
         'milo_home': os.environ.get('MILO_HOME') or config.get('milo_home', ''),
     }
@@ -192,11 +201,12 @@ def hms_to_seconds(walltime: str) -> int:
     return h * 3600 + m * 60 + sec
 
 
-def uge_directives(base: str, jobname: str, cpus: str, mem: str, walltime: str,
-                   array: str, limit: int | None, constraint: str | None) -> str:
-    """The Gsub.py / runorca.py house idiom: one combined -l line, times in
-    seconds, h_data per slot and h_vmem per slot x slots, highp past 24 h so the
-    job lands on Houk-owned nodes."""
+def uge_directives(jobname: str, cpus: str, mem: str, walltime: str,
+                   array: str, limit: int | None, constraint: str | None,
+                   resources: str = UGE_RESOURCES) -> str:
+    """One combined -l line, times in seconds, h_data per slot and h_vmem per
+    slot x slots. `highp` past 24 h asks for nodes your group owns, which is
+    the only queue that runs that long."""
     total_mb = (int(mem) + 4) * 1024
     per_slot = -(-total_mb // int(cpus))          # ceil: h_data is per slot
     h_rt = hms_to_seconds(walltime)
@@ -205,7 +215,7 @@ def uge_directives(base: str, jobname: str, cpus: str, mem: str, walltime: str,
               f'h_rt={h_rt}', f's_rt={s_rt}']
     if h_rt > 24 * 3600:
         limits.append('highp')
-    limits.append(f'arch={constraint or "intel*"}')
+    limits.append(f'arch={constraint}' if constraint else resources)
     lines = ['#$ -cwd', f'#$ -N {jobname}',
              '#$ -o joblogs/joblog.$JOB_NAME.$JOB_ID.$TASK_ID',
              '#$ -j y', '#$ -notify', f'#$ -t {array}']
@@ -301,7 +311,7 @@ def parse_args():
     elif args.wait:
         p.error('--wait only means anything with --hoffman2/--expanse.')
     if args.scheduler == 'auto':
-        args.scheduler = detect_scheduler()
+        args.scheduler = load_config().get('scheduler') or detect_scheduler()
     if args.rerun:
         args.force = True
     if args.backward and args.traj != 1:
@@ -485,8 +495,8 @@ def build_script(base: str, cpus: str, mem: str, pairs: list[str], walltime: str
         if ',' in array:
             parts = [int(x) for x in array.split(',')]
             span = f'{min(parts)}-{max(parts)}'
-        directives = uge_directives(base, jobname, cpus, mem, walltime,
-                                    span, limit, constraint)
+        directives = uge_directives(jobname, cpus, mem, walltime, span, limit,
+                                    constraint, cfg['uge_resources'])
     else:
         directives = '\n'.join(
             [f'#SBATCH --job-name={jobname}',
@@ -690,6 +700,7 @@ def main():
         sys.exit(f'ERROR: --traj must be at least 1, got {args.traj}')
     config = load_config()
     cfg = site_config(args.scheduler, config)
+    milo_home(cfg)      # unknown location fails here, not inside the job
     # plot_interpreter() returns a path on THIS machine, and plot_traj.py
     # lives next to this script -- neither exists on the cluster. Plot after
     # `rjob fetch`, when the trajectories are back here.

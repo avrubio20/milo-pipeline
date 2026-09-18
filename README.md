@@ -54,6 +54,7 @@ Supporting another cluster means editing the config, not the code.
 ## Environment variables
 
 These override the config file for one run; normally you need none of them.
+The config's own keys are listed in [INSTALL.md](INSTALL.md).
 
 | variable | does |
 |---|---|
