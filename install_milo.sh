@@ -67,6 +67,10 @@ if [[ $CHECK -eq 1 ]]; then
             ok "module load gaussian -> $(command -v g16)"
         else
             bad "'module load gaussian' did not give a working g16"
+            echo "        If you are in the gaussian group, this is usually the shell:"
+            echo "        the gaussian module needs \$SCRATCH, which only a login shell"
+            echo "        sets. Log in with ssh and run this at the prompt, not through"
+            echo "        'ssh host \"...\"' or a script."
         fi
         if (. /u/local/Modules/default/init/modules.sh 2>/dev/null && \
             module load python/3.9.6 2>/dev/null && python3 -V >/dev/null 2>&1); then
@@ -174,6 +178,10 @@ elif [[ $ADDPATH -eq 1 ]]; then
         || run bash -c "printf '\n# Milo pipeline\n' >> '$HOME/.bashrc'"
     for line in "$LINE" "$MH_LINE"; do
         [[ -z "$line" ]] && continue
+        # Already on PATH from some earlier line? Do not add a second one that
+        # differs only in quoting.
+        [[ "$line" == "$LINE" && ":$PATH:" == *":$SCRIPTS:"* ]] \
+            && { echo "~/.bashrc: $SCRIPTS is already on your PATH, leaving it alone"; continue; }
         if grep -qsF "$line" "$HOME/.bashrc"; then
             echo "~/.bashrc already has: $line"
         else
@@ -182,6 +190,13 @@ elif [[ $ADDPATH -eq 1 ]]; then
         fi
     done
     echo "Run 'source ~/.bashrc' or log back in."
+    if grep -qsE '^\s*(\[\[ \$-|case \$-)' "$HOME/.bashrc"; then
+        echo
+        echo "NOTE: your ~/.bashrc returns early for non-interactive shells, and"
+        echo "      the line above was appended after that point. It applies when"
+        echo "      you are typing at a prompt -- which is how this is meant to be"
+        echo "      used -- but not to 'ssh host \"command\"' or scripts."
+    fi
 else
     echo "Add to ~/.bashrc (or re-run with --add-path):"
     [[ ":$PATH:" == *":$SCRIPTS:"* ]] || echo "    $LINE"
@@ -190,9 +205,10 @@ fi
 
 cat <<NEXT
 
-Next:
-    install_milo.sh --check          # verifies the environment and runs the tests
-    install_milo.sh --example        # writes ./milo_example/DA_example.in
+Next (from this directory -- install_milo.sh stays here, it is not copied
+to your PATH like the four tools are):
+    ./install_milo.sh --check        # verifies the environment and runs the tests
+    ./install_milo.sh --example      # installs as usual, and writes ./milo_example/
     cd milo_example
     runmilo.py DA_example.in --traj 1     # one trajectory, ~10 min on Hoffman2
     milosum.py DA_example.in              # what happened

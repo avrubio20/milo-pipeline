@@ -40,9 +40,16 @@ compute time — that stays your decision, later and explicitly.
 
     ssh <your-user>@hoffman2.idre.ucla.edu
 
-You land on a login node. Login nodes are for editing, submitting and small
-commands; anything that calculates goes to the queue. Nothing in this install
-calculates, so all of it is fine to run here.
+You land on a *login node*: the machine you get when you log in, meant for
+editing files, small commands and submitting work. Anything that actually
+calculates goes to the queue instead. Nothing in this install calculates, so all
+of it is fine to run here.
+
+**Stay logged in and type the commands at the prompt.** Running them the other
+way — `ssh hoffman2 'some command'` from your laptop, one command at a time —
+gives you a stripped-down shell each time, where `module load gaussian` fails
+for reasons that have nothing to do with your account. If step 3 reports a
+Gaussian problem, this is the first thing to check.
 
 ## Step 2 — get the code
 
@@ -64,11 +71,17 @@ in the `gaussian` group, a working `g16` after `module load gaussian`, the
 `python/3.9.6` module, the four tools on your `PATH`, and Milo itself. Each line
 comes back `ok`, `WARN` or `FAIL`.
 
-On a fresh account, expect `FAIL` on the tools and on Milo — you have not
-installed them yet, which is step 4. What you are reading this output for is
-the `gaussian` group line and the `g16` line. If either of those fails, stop and
-sort that out first; the rest of the install will succeed and then the first job
-will fail.
+On a fresh account, expect `FAIL` on the four tools, on Milo, and on both test
+suites — none of that exists yet, and step 4 is what creates it.
+
+What you are reading this output for is two lines: the `gaussian` group and
+`g16`.
+
+- **Group line fails.** You are not in the `gaussian` group yet. Everything else
+  will install fine and then your first job will fail, so sort this out now.
+- **Group line passes but `g16` fails.** Nine times out of ten this is the shell,
+  not your account — see the note in step 1. Log in properly, run `--check`
+  again, and only chase it further if it still fails.
 
 ## Step 4 — install
 
@@ -98,8 +111,11 @@ prints the exact line to add.
 
 `source ~/.bashrc` re-reads the startup file so the new `PATH` takes effect
 without logging out. Everything should now be `ok`, including the two test
-suites, which the check runs for you — they take about two seconds and need no
-scheduler.
+suites, which the check runs for you.
+
+The suites take about two seconds on a quiet machine, but a shared login node
+with a busy filesystem can stretch that to a few minutes. Let it finish; it has
+not hung.
 
 If `runmilo.py` still comes back "not on PATH", the `PATH` line did not take.
 Check it is really in `~/.bashrc` (`tail ~/.bashrc`), then open a fresh login.
@@ -110,10 +126,11 @@ Check it is really in `~/.bashrc` (`tail ~/.bashrc`), then open a fresh login.
     cd milo_example
     runmilo.py DA_example.in --traj 1
 
-`--example` writes `milo_example/DA_example.in`: a 16-atom Diels-Alder
-transition state, 50 steps, at 8 cpus and 12 GB. It is small on purpose — about
-ten minutes of compute — and it carries the bond pairs the summary needs, so
-neither command below needs any flags.
+`--example` re-runs the ordinary install (harmless — it reports everything is
+already current) and then writes `milo_example/DA_example.in`: a 16-atom
+Diels-Alder transition state, 50 steps, at 8 cpus and 12 GB. It is small on purpose — about ten
+minutes of compute — and it carries the bond pairs the summary needs written
+into it, so neither command below needs any options.
 
 `runmilo.py` writes a submission script called `DA_example_milo.sh` next to the
 input and submits it. It prints the job id.
@@ -147,6 +164,11 @@ Start from a Gaussian frequency calculation on your transition state, run with
 normal modes for Milo to sample them properly).
 
     prepmilo.py -i freq/TS.out -o RUN --fs 200 -p 8 -m 12
+
+`freq/TS.out` is a stand-in for wherever your own Gaussian output actually is —
+there is no such file in this repository, and nothing creates one for you. If
+you do not have one yet, stop after step 6; the example already proved the
+install works.
 
 This reads the Gaussian output and writes `RUN.in`, a Milo input: 200 fs of
 trajectory, 8 cpus, 12 GB. It also works out which atom pairs are moving in the
@@ -214,11 +236,33 @@ Useful flags, all of which have sensible defaults:
 | `--dry-run` | print the script; write nothing, submit nothing |
 | `--site` | force a cluster preset instead of auto-detecting |
 
+## Words used above
+
+You can install everything without these, but they turn up in every cluster
+document you will read after this one.
+
+| word | means |
+|---|---|
+| login node | the machine you land on when you ssh in; for editing and submitting, not computing |
+| scheduler | the program that decides whose job runs where and when — UGE here, Slurm elsewhere |
+| the queue | jobs waiting for the scheduler to give them a machine |
+| job array | one submission that runs N near-identical jobs, here one trajectory each |
+| module | the cluster's way of switching software on: `module load gaussian` puts Gaussian in reach |
+| PATH | the list of folders your shell searches for a command, so you can type `runmilo.py` from anywhere |
+| unix group | a named set of users; the `gaussian` one is who is allowed to run Gaussian |
+| walltime | how long you are asking to be allowed to run before the scheduler stops you |
+| allocation / account | the pot of compute time a job is billed to (Hoffman2 does not need one here) |
+| scratch | fast temporary disk on the machine doing the work; wiped when the job ends |
+| flag / option | the `--something` parts of a command, e.g. `--traj 100` |
+| ensemble | all the trajectories of one run, treated as one statistical sample |
+| branching ratio | what fraction of trajectories ended as product rather than reactant |
+
 ## When something goes wrong
 
 | what you see | what it means |
 |---|---|
-| `command not found: runmilo.py` | `PATH` line missing or shell not reloaded — step 5 |
+| `command not found: runmilo.py` | `PATH` line missing or shell not reloaded — step 5. If it works when you are logged in but not via `ssh host 'command'`, that is expected: see step 1 |
+| `--check` fails on `g16` but the group line passed | almost always the shell, not your account — step 1 |
 | `--check` fails on the `gaussian` group | you are not in it yet; jobs will fail until you are |
 | `ERROR: no Milo found at ...` | Milo is somewhere non-default: `export MILO_HOME=<path>` |
 | job disappears in seconds, joblog mentions memory | asked for more memory than your `-l` line allows; raise `-m` |
@@ -244,16 +288,21 @@ Everything above is identical except:
   `g16` runs before you submit anything.
 
 `runmilo.py` works out which scheduler it is on by itself and writes the right
-kind of script; `--site` overrides it if you need to. Per-machine notes are in
-`clusters/`.
+kind of script; `--site` overrides it if you need to.
+
+Each machine also has its own notes folder, worth a look once you are past the
+install: `clusters/hoffman2/`, `clusters/expanse/`, `clusters/workstation/`.
+They hold the measured timings, the local quirks, and a `deploy.sh` for pushing
+updated tools up from a machine you develop on.
 
 ## Uninstalling
 
 Nothing is installed system-wide, so removing it is removing files:
 
     rm -f ~/Scripts/{runmilo.py,milosum.py,prepmilo.py,plot_traj.py}
-    rm -f ~/Scripts/{test_runmilo.sh,test_milosum.sh,install_milo.sh}
+    rm -f ~/Scripts/{test_runmilo.sh,test_milosum.sh}
     rm -rf ~/Programs/milo-1.0.3
+    rm -rf ~/milo-pipeline          # the clone, if you want that gone too
 
 and delete the `PATH` line from `~/.bashrc` if nothing else uses `~/Scripts`.
 Your results are untouched by all of that — they live wherever you submitted

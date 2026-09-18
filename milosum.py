@@ -261,9 +261,13 @@ def main():
 
     members = expected_members(base, False, args.expect)
     if not members:
-        sys.exit(f'ERROR: no {base}_milo.sh to read the ensemble size from. '
-                 'Pass --expect N -- summarising whatever is in results/ would '
-                 'report a ratio over the survivors.')
+        sys.exit(f'ERROR: no {base}_milo.sh here, so there is no record of how '
+                 'many trajectories were meant to run.\n'
+                 '       runmilo.py writes that file when it submits; if you have '
+                 'not run anything yet, there is nothing to summarise.\n'
+                 '       For an ensemble submitted by hand, say how many members '
+                 'it had with --expect N. Counting only the results that happen '
+                 'to be present would quietly report a ratio over the survivors.')
     reverse = expected_members(base, True, None)
     # Reverse halves are discovered on disk as well as in the manifest. Trusting
     # the manifest alone means a deleted <base>_rev_milo.sh silently turns a
