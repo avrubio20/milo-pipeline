@@ -314,6 +314,66 @@ document you will read after this one.
 | ensemble | all the trajectories of one run, treated as one statistical sample |
 | branching ratio | what fraction of trajectories ended as product rather than reactant |
 
+## Reading `--check`, line by line
+
+Every line comes back `ok`, `note` or `FAIL`. A `note` is information, not a
+problem. Here is what each `FAIL` means and what to do about it.
+
+**`no config yet; install first`** — a `note`, and normal before you have
+installed. It becomes `ok config: <path>` afterwards. If it still says this
+after installing, the installer wrote its config somewhere else: pass the same
+`--config` to both, or set `MILO_CONF`.
+
+**`no qsub found -- are you on a login node?`** — `qsub` is how anything gets
+submitted here. Almost always you are on the wrong kind of machine: a compute
+node, or a shell that is not a real login. Log in again with `ssh` and try at
+the prompt.
+
+**`you are not in the 'gaussian' group, which is usually why`** — Gaussian is
+licensed per group. Ask IDRE user support to add you, with your PI copied in to
+confirm you are covered by their licence. This one you cannot work around, and
+nothing will run until it is sorted.
+
+**`g16 is not reachable after the setup lines in <config>`** — three causes,
+in order of likelihood:
+
+1. *The shell.* The gaussian module needs `$SCRATCH`, which only a login shell
+   sets, so this fails under `ssh host "command"` or inside a script. The check
+   prints this hint itself. Log in and run it at the prompt.
+2. *The group*, above — the check says so on its own line.
+3. *The setup lines are wrong for this machine.* Look at `g16_setup` in your
+   config. Run those lines by hand; whatever error you get is the real one.
+
+**`<tool> not on PATH (add <bindir> to it)`** — expected before installing, and
+after installing means the `PATH` line has not taken. Either you have not run
+`source ~/.bashrc`, or `--add-path` wrote to a file your shell does not read.
+Check with `tail ~/.bashrc` (or `~/.cshrc` under tcsh), then open a fresh login.
+If it works when you are logged in but not through `ssh host "command"`, that is
+expected: most `.bashrc` files stop early for non-interactive shells.
+
+**`no Milo at <dir> (run this script without --check first)`** — expected
+before installing. Afterwards it means Milo is not where the config says. Check
+`milo_home` in your config against what is actually on disk; the installer
+puts it in `PREFIX/opt/milo-1.0.3`.
+
+**`test_runmilo.sh: no Milo to borrow setup_backward.py from`** — the suite
+needs a real Milo for one of its checks. Install first, or `export MILO_HOME`.
+The failure lists every place it looked.
+
+**`test_runmilo.sh: fresh run exited 1`** or another assertion — the generated
+job script did not behave. Run the suite directly to see the whole output
+rather than its last line:
+
+    bash <bindir>/test_runmilo.sh
+
+The usual cause after an update is a stale copy: `--check` runs the *installed*
+suites, not the ones in your clone. Re-run the installer with `--force` after
+`git pull`.
+
+**`<suite> not found; skipping`** — a `note`. The suites are missing from both
+the install and the current directory, which only happens with a partial
+install. Re-run the installer.
+
 ## When something goes wrong
 
 | what you see | what it means |
