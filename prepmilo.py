@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""
+prepmilo.py
+
+Turn a Gaussian hpmodes frequency calculation into a ready-to-run Milo input,
+and optionally fan it out into a seeded ensemble.
+
+    prepmilo.py -i freq/DA_ts.out -o DA_fwd --fs 100
+    prepmilo.py -i freq/DA_ts.out -o DA_fwd --fs 200 -n 100
+    prepmilo.py -i freq/DA_ts.out -o DA_fwd.in --fs 100 --phase 1-5
+
+Wraps Milo's own parse_frequencies.py and setup_ensemble.py; this script only
+fills in the $job section and picks the phase pair. Hand the result to
+runmilo.py.
+
+Note on -n: it is the number of *trajectories*, matching Milo's
+setup_ensemble.py. Trajectory length is --fs.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+def _milo_home() -> Path:
+    """Where Milo lives. MILO_HOME wins, as it does in runmilo.py; otherwise
+    the two names install_milo.sh uses."""
+    import os
+    candidates = ([Path(os.environ['MILO_HOME'])] if os.environ.get('MILO_HOME')
+                  else [Path.home() / 'Programs/milo-1.0.3',
+                        Path.home() / 'Programs/milo'])
+    for c in candidates:
+        if (c / 'milo_1_0_3/tools').is_dir():
+            return c
+    sys.exit('ERROR: no Milo found at ' + ', '.join(map(str, candidates))
+             + '\n       install it with install_milo.sh, or export MILO_HOME')
+
+
+MILO = _milo_home()
+TOOLS = MILO / 'milo_1_0_3/tools'
+LIGHT = {'H', 'D'}  # skipped when auto-picking the phase pair
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('-i', '--input', required=True,
+                   help='Gaussian freq=hpmodes output')
+    p.add_argument('-o', '--out', required=True,
+                   help='output name; "DA_fwd" and "DA_fwd.in" both work')
+    p.add_argument('--fs', type=float, default=200.0,
+                   help='trajectory length in femtoseconds (default: 200)')
+    p.add_argument('--step', type=float, default=1.0,
+                   help='step size in fs (default: 1.0)')
+    p.add_argument('-n', '--trajectories', type=int, default=None,
+                   help='fan out into N seeded copies via setup_ensemble.py')
+    p.add_argument('--phase', default='auto',
+                   help='atom pair as i-j, 1-based (default: auto — the heavy-atom '
+                        'pair that moves most along the imaginary mode)')
+    p.add_argument('--direction', default='bring_together',
+                   choices=['bring_together', 'push_apart'],
+                   help='direction along the imaginary mode (default: bring_together)')
+    p.add_argument('--temp', type=float, default=298.15, help='kelvin (default: 298.15)')
+    p.add_argument('-p', '--processors', type=int, default=24)
+    p.add_argument('-m', '--memory', type=int, default=48, help='GB for Gaussian %%mem')
+    p.add_argument('--force', action='store_true', help='overwrite an existing output')
+    return p.parse_args()
+
+
+def run_parse_frequencies(freq_out: Path) -> str:
+    """Call Milo's parser and return the input file it produces."""
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = Path(tmp) / 'raw.in'
+        r = subprocess.run(
+            [sys.executable, str(TOOLS / 'parse_frequencies.py'),
+             str(freq_out), str(dest)],
+            capture_output=True, text=True, env={'PYTHONPATH': str(MILO), 'PATH': ''},
+        )
+        if r.returncode != 0:
+            msg = (r.stderr.strip().splitlines() or ['unknown error'])[-1]
+            if 'hpmodes' in msg:
+                sys.exit(f'ERROR: {freq_out} is not a high-precision frequency '
+                         'calculation.\nRe-run the Gaussian job with '
+                         "'freq=(hpmodes,noraman)' — Milo cannot use the "
+                         'standard-precision normal modes.')
+            sys.exit(f'ERROR: parse_frequencies.py failed on {freq_out}:\n{msg}')
+        return dest.read_text()
+
+
+def section(text: str, name: str) -> str:
+    m = re.search(rf'\${name}\n(.*?)\$end', text, re.S)
+    return m.group(1) if m else ''
+
+
+def auto_phase(text: str) -> tuple[str, list[tuple[str, float]]]:
+    """Pick the heavy-atom pair whose distance changes most along mode 0.
+
+    That mode is the reaction coordinate; the pair that moves most along it is
+    the least ambiguous sensor for which way the trajectory is headed.
+    """
+    import numpy as np
+    mol = [l.split() for l in section(text, 'molecule').strip().split('\n')[1:] if l.strip()]
+    sym = [r[0] for r in mol]
+    X = np.array([[float(v) for v in r[1:4]] for r in mol])
+    row = section(text, 'frequency_data').strip().split('\n')[0].split()
+    if float(row[0]) >= 0:
+        sys.exit('ERROR: the first mode is not imaginary — this is not a transition '
+                 'state, or the frequency job converged to a minimum.')
+    D = np.array([float(v) for v in row[3:]]).reshape(-1, 3)
+
+    ranked = []
+    for i in range(len(sym)):
+        for j in range(i + 1, len(sym)):
+            if sym[i] in LIGHT or sym[j] in LIGHT:
+                continue
+            d0 = np.linalg.norm(X[i] - X[j])
+            d1 = np.linalg.norm((X[i] + D[i]) - (X[j] + D[j]))
+            ranked.append((f'{i+1}-{j+1}', d1 - d0))
+    ranked.sort(key=lambda t: -abs(t[1]))
+    return ranked[0][0], ranked[:4]
+
+
+def moving_pairs(ranked: list[tuple[str, float]]) -> list[str]:
+    """Every heavy-atom pair moving with the reaction coordinate, not just the
+    one `phase` can name. A Diels-Alder TS has two forming bonds of equal
+    magnitude and opposite-signed spectators, so keeping those within 10% of the
+    largest displacement, and only in the same direction, picks out exactly the
+    bonds worth plotting and classifying downstream."""
+    if not ranked:
+        return []
+    top = ranked[0][1]
+    return [pair for pair, delta in ranked
+            if delta * top > 0 and abs(delta) >= 0.9 * abs(top)][:4]
+
+
+def job_section(args, pair: str, pairs: list[str]) -> str:
+    header = re.search(r'gaussian_header\s+(.*)', args._raw).group(1).strip()
+    i, j = pair.split('-')
+    # Stamped so runmilo.py and milosum.py do not need --pairs: `phase` can name
+    # only one bond, and a cycloaddition forms two. Milo strips in-line comments
+    # before parsing, so this line is invisible to it.
+    stamp = f'    # pairs {" ".join(pairs)}\n' if pairs else ''
+    return (f'$job\n'
+            + stamp +
+            f'    gaussian_header         {header}\n'
+            f'    program                 gaussian16\n'
+            f'    step_size               {args.step:.2f}\n'
+            f'    max_steps               {round(args.fs / args.step)}\n'
+            f'    temperature             {args.temp}\n'
+            f'    phase                   {args.direction} {i} {j}\n'
+            f'    memory                  {args.memory}\n'
+            f'    processors              {args.processors}\n'
+            f'    random_seed             generate\n'
+            f'$end\n')
+
+
+def main():
+    args = parse_args()
+    freq_out = Path(args.input)
+    if not freq_out.is_file():
+        sys.exit(f'ERROR: input file not found: {freq_out}')
+    out = Path(args.out if args.out.endswith('.in') else f'{args.out}.in')
+    if out.exists() and not args.force:
+        sys.exit(f'ERROR: refusing to overwrite {out.resolve()}. '
+                 'Re-run with --force if you mean to replace it.')
+
+    args._raw = run_parse_frequencies(freq_out)
+
+    if args.phase == 'auto':
+        pair, ranked = auto_phase(args._raw)
+        pairs = moving_pairs(ranked)
+        print('phase pair (auto) — distance change along the imaginary mode:')
+        for name, delta in ranked:
+            mark = '   <- chosen' if name == pair else (
+                '   <- also followed' if name in pairs else '')
+            print(f'    {name:<8} {delta:+.3f} A{mark}')
+    else:
+        pair = args.phase
+        if not re.fullmatch(r'\d+-\d+', pair):
+            sys.exit(f"ERROR: --phase must look like '1-5', got {pair!r}")
+        pairs = [pair]
+
+    body = args._raw[args._raw.index('$comment'):]
+    out.write_text(job_section(args, pair, pairs) + '\n' + body)
+    steps = round(args.fs / args.step)
+    print(f'\nWrote {out.resolve()}')
+    print(f'  {steps} steps x {args.step:g} fs = {args.fs:g} fs')
+    print(f'  phase     = {args.direction} {pair.replace("-", " ")}')
+    print(f'  bonds     = {" ".join(pairs)}  (followed by runmilo/milosum; '
+          'override with --pairs)')
+    print(f'  resources = {args.processors} cpus, {args.memory} GB')
+
+    if args.trajectories:
+        r = subprocess.run(
+            [sys.executable, str(TOOLS / 'setup_ensemble.py'),
+             '-n', str(args.trajectories), '-f', str(out), '--no_script'],
+            capture_output=True, text=True, env={'PYTHONPATH': str(MILO), 'PATH': ''},
+        )
+        if r.returncode != 0:
+            sys.exit(f'ERROR: setup_ensemble.py failed:\n{r.stderr.strip()}')
+        made = sorted(out.parent.glob(f'{out.stem}_*.in'))
+        print(f'\nEnsemble: {len(made)} seeded copies ({made[0].name} ...)')
+        print('NOTE: runmilo.py does not want these. One input serves the whole '
+              'ensemble -- each array member seeds itself. Submit the single '
+              f'{out.name} with --traj instead; these copies carry explicit '
+              'seeds and would run the identical trajectory N times.')
+    print(f'\nSubmit with:  runmilo.py {out.name} --traj <N>')
+
+
+if __name__ == '__main__':
+    main()
