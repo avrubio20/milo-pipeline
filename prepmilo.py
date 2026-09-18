@@ -19,6 +19,7 @@ setup_ensemble.py. Trajectory length is --fs.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -26,17 +27,14 @@ import tempfile
 from pathlib import Path
 
 def _milo_home() -> Path:
-    """Where Milo lives. MILO_HOME wins, as it does in runmilo.py; otherwise
-    the two names install_milo.sh uses."""
-    import os
-    candidates = ([Path(os.environ['MILO_HOME'])] if os.environ.get('MILO_HOME')
-                  else [Path.home() / 'Programs/milo-1.0.3',
-                        Path.home() / 'Programs/milo'])
-    for c in candidates:
-        if (c / 'milo_1_0_3/tools').is_dir():
-            return c
-    sys.exit('ERROR: no Milo found at ' + ', '.join(map(str, candidates))
-             + '\n       install it with install_milo.sh, or export MILO_HOME')
+    """Where Milo lives, from the same config runmilo.py reads."""
+    from runmilo import CONFIG_PATH, load_config     # installed side by side
+    home = os.environ.get('MILO_HOME') or load_config().get('milo_home')
+    if not home:
+        sys.exit('ERROR: Milo\'s location is not recorded. Run install_milo.sh, '
+                 f'or write `milo_home = <path>` into {CONFIG_PATH}, '
+                 'or export MILO_HOME.')
+    return Path(os.path.expandvars(home))
 
 
 MILO = _milo_home()

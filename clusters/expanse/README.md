@@ -10,8 +10,8 @@
 
 | what | where |
 |---|---|
-| Milo | `~/Programs/milo` |
-| scripts | `~/bin` (what `install_milo.sh` uses here) |
+| Milo | `PREFIX/opt/milo-1.0.3` |
+| scripts | wherever you pointed `--prefix` |
 | scratch | `/scratch/$USER/job_$SLURM_JOB_ID` |
 | test runs | wherever you submit from |
 

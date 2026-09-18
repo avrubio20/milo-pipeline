@@ -14,6 +14,11 @@ which they download for you. Milo itself is not modified or vendored here.
 **New here? Read [INSTALL.md](INSTALL.md).** It walks through a first install on
 a cluster from scratch, assuming no prior experience with either.
 
+    ./install_milo.sh --prefix ~/milo --add-path
+
+installs Milo and the tools under one directory of your choosing and records
+where they went, so nothing below has a path compiled into it.
+
 ## Layout
 
     install_milo.sh   put all of this, and Milo itself, on an account
@@ -28,31 +33,34 @@ a cluster from scratch, assuming no prior experience with either.
     clusters/         per-machine notes and deploy scripts
 
 **There is one copy of every tool, not one per machine.** `runmilo.py` detects
-the site (Slurm's `ClusterName`, else `SGE_ROOT`) and emits `#SBATCH` or `#$`
-directives accordingly; `--site` overrides it. Forking the tools per cluster
-would mean fixing every future bug three times, which is what the `clusters/`
-folders are deliberately *not* for: they hold paths, notes and deploy commands,
-and nothing that can drift.
+the scheduler (`SGE_ROOT` means UGE, else Slurm) and emits `#$` or `#SBATCH`
+directives accordingly; `--scheduler` overrides it. Forking the tools per
+cluster would mean fixing every future bug three times, which is what the
+`clusters/` folders are deliberately *not* for: they hold notes and deploy
+commands, and nothing that can drift.
 
-## Where it has been run
+## Where things go
 
-| machine | scheduler | scripts | Milo |
-|---|---|---|---|
-| Slurm workstation | Slurm | `~/bin` | `~/Programs/milo` |
-| Expanse (SDSC) | Slurm | `~/bin` | `~/Programs/milo` |
-| Hoffman2 (UCLA) | UGE | `~/Scripts` | `~/Programs/milo-1.0.3` |
+You choose, with `--prefix` and the overrides under `install_milo.sh --help`:
 
-Same chemistry, same test suites passing on all three (2026-09-14).
-Adding a cluster means adding a `SITES` entry in `runmilo.py`, not a second
-generator.
+    PREFIX/bin/                 the four tools
+    PREFIX/opt/milo-1.0.3/      Milo itself
+    ~/.milo.conf                what you chose, which the tools read back
+
+Nothing is hardcoded to a machine. Run on a Slurm workstation, Expanse and
+Hoffman2 (UGE), same chemistry and the same suites passing on all three.
+Supporting another cluster means editing the config, not the code.
 
 ## Environment variables
 
+These override the config file for one run; normally you need none of them.
+
 | variable | does |
 |---|---|
-| `MILO_HOME` | where Milo itself lives, if not the default for your site |
-| `MILO_SCRATCH` | scratch root for the job, if not the site default |
-| `MILO_ACCOUNT` | Slurm account to bill (Expanse and similar) |
+| `MILO_CONF` | the config file to read (default `~/.milo.conf`) |
+| `MILO_HOME` | where Milo itself lives |
+| `MILO_SCRATCH` | scratch root for the job |
+| `MILO_ACCOUNT` | scheduler account to bill |
 
 ## Before changing anything
 

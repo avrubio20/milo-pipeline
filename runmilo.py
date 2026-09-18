@@ -44,17 +44,17 @@ input, which is what lets one .in serve two resource profiles:
 Wide is for latency (one trajectory, answered quickly); narrow is for
 throughput (many trajectories, more of them at once).
 
-Measured on the 16-atom Diels-Alder at wb97xd/6-31G*, 50 steps: 2c 338 s,
+Measured on a 16-atom Diels-Alder at wb97xd/6-31G*, 50 steps: 2c 338 s,
 4c 200 s, 8c 172 s, 16c 148 s, 24c 191 s -- i.e. 24 cores is past the knee and
 slower than 16. That knee moves right with basis-function count, not atom
-count, so a larger system will use 8 cores better than this one does. 8 is the
-standing production choice; re-measure only if a system behaves oddly.
+count, so a larger system will use 8 cores better than this one does. 8 is a
+good default; re-measure only if a system behaves oddly.
 
-Portability: --site selects a cluster preset (g16 setup, node-local scratch,
-account/partition). MILO_HOME and MILO_SCRATCH override the paths at submit
-time; --account/--partition/--constraint override the preset.
+Portability: paths and the g16 setup come from the config install_milo.sh
+writes (~/.milo.conf, or MILO_CONF). MILO_HOME, MILO_SCRATCH and MILO_ACCOUNT
+override it for one run; --scheduler forces slurm or uge if detection is wrong.
 
-    runmilo.py DA_fwd.in --site expanse --traj 100 --cpus 8 --array-limit 12
+    runmilo.py DA_fwd.in --scheduler uge --traj 100 --cpus 8 --array-limit 12
 
 Run it on a cluster from this directory, without logging in. This needs
 remotejob.py, which is a separate tool and not part of this repository:
@@ -62,8 +62,9 @@ remotejob.py, which is a separate tool and not part of this repository:
     runmilo.py DA_fwd.in --traj 20 --hoffman2     # rsync up, qsub there
     rjob fetch                                    # results back here, remote copy deleted
 
-Note that --mem is only advisory on the workstation (TaskPlugin=task/none) but
-is enforced by cgroups on Expanse, where under-declaring it kills the member.
+Note that --mem is advisory on a scheduler without cgroups and enforced on one
+with them (TaskPlugin=task/cgroup), where under-declaring it kills the member.
+Declare it honestly either way.
 """
 from __future__ import annotations
 
@@ -79,74 +80,69 @@ from pathlib import Path
 LOCAL = Path(__file__).resolve().parent
 PLOT = LOCAL / 'plot_traj.py'
 
-# The plot needs ase + matplotlib. A Slurm job's default python3 is whichever
-# conda env sits first on PATH (currently ambertools26, which has neither), so
-# the interpreter is resolved here and baked into the script as an absolute path.
-PLOT_PY_CANDIDATES = (
-    sys.executable,
-    str(Path.home() / 'miniconda3/envs/pygsm/bin/python'),
-    str(Path.home() / 'miniconda3/envs/py311/bin/python'),
-)
+# The plot needs ase + matplotlib, which the python3 a job happens to inherit
+# often lacks, so an interpreter that has them is resolved here and baked into
+# the script as an absolute path. `plot_python = <path>` in the config names
+# one explicitly; otherwise this interpreter and plain python3 are tried.
 
 
-# Per-cluster differences, verified 2026-09-12. Only three things actually vary:
-# how g16 gets onto PATH, where node-local scratch lives, and whether Slurm
-# demands an account/partition. Expanse has no bsd/g16.profile -- the module
-# sets PATH/GAUSS_EXEDIR/G16_BASIS itself -- so do not source one there.
-SITES = {
-    'local': {
-        'g16_init': 'source /etc/g16setup',
-        'scratch_root': '${SLURM_TMPDIR:-/tmp}',
-        'account': None,
-        'partition': None,
-        'scheduler': 'slurm',
-        'milo_home': '$HOME/Programs/milo',
-        'python': 'python3',
-    },
-    'hoffman2': {
-        # Modules first; `module load gaussian` is G16 C.02 avx here.
-        'g16_init': ('. /u/local/Modules/default/init/modules.sh\n'
-                     'module load gaussian\n'
-                     '# Not the login python3: that is a personal conda env on\n'
-                     '# this account and will not exist on someone else\'s.\n'
-                     'module load python/3.9.6'),
-        # $TMPDIR is node-local and UGE removes it; $SCRATCH is the fallback and
-        # is initial-sharded (/u/scratch/a/<user>), not /u/scratch/<user>.
-        'scratch_root': '${TMPDIR:-$SCRATCH}',
-        'account': None,
-        'partition': None,
-        'scheduler': 'uge',
-        # Where install_milo.sh puts it by default. If yours lives anywhere
-        # else (a group directory, a project allocation), export MILO_HOME --
-        # install_milo.sh --add-path writes that line for you. The script
-        # fails loudly rather than guessing if neither path exists.
-        'milo_home': '$HOME/Programs/milo-1.0.3',
-        'python': 'python3',   # from the module above, not from PATH
-    },
-    'expanse': {
-        # module is not a function in a non-login batch shell; initialise lmod
-        # first if it is missing.
-        'g16_init': ('command -v module >/dev/null 2>&1 || '
-                     'source /usr/share/lmod/lmod/init/bash\n'
-                     'module load cpu/0.15.4 gaussian/16.C.01'),
-        # Node-local NVMe. The scheduler owns this root and cleans it up; we
-        # only ever create and delete our own child inside it. :-$$ keeps the
-        # script runnable outside Slurm, where SLURM_JOB_ID is unset.
-        'scratch_root': '/scratch/$USER/job_${SLURM_JOB_ID:-$$}',
-        # Your allocation, not a shared one: export MILO_ACCOUNT, or pass
-        # --account. Unset means Slurm falls back to your default account.
-        'account': os.environ.get('MILO_ACCOUNT'),
-        'partition': 'shared',
-        'scheduler': 'slurm',
-        'milo_home': '$HOME/Programs/milo',
-        'python': 'python3',
-    },
+# What a site actually needs is three things: how g16 gets onto PATH, where
+# node-local scratch lives, and whether the scheduler wants an account. All
+# three are recorded by install_milo.sh in the config file below, so no machine
+# is named in this file and nothing has to be edited to add one.
+CONFIG_PATH = Path(os.environ.get('MILO_CONF') or Path.home() / '.milo.conf')
+
+# --hoffman2/--expanse pick where the job goes; the scheduler follows from it.
+REMOTE_SCHEDULER = {'hoffman2': 'uge', 'expanse': 'slurm'}
+
+SCHEDULER_DEFAULTS = {
+    'slurm': {'scratch': '${SLURM_TMPDIR:-/tmp}'},
+    'uge': {'scratch': '${TMPDIR:-$SCRATCH}'},
 }
 
 
-# Slurm and UGE differ in about ten places; the body of the script -- skip
-# guard, seed guard, staging, traps, META/FOOTER -- is identical and is not
-# forked. Adding a cluster means adding a SITES entry, not a second generator.
+def load_config(path: Path = None) -> dict:
+    """Read the config install_milo.sh wrote: `key = value`, and indented
+    lines continue the value above (which is how g16_setup carries several
+    shell lines). Absent is not an error -- the defaults still run."""
+    path = path or CONFIG_PATH
+    config, key = {}, None
+    try:
+        text = path.read_text()
+    except OSError:
+        return config
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        if line[0].isspace() and key:
+            config[key] += '\n' + line.strip()
+        elif '=' in line:
+            key, _, value = line.partition('=')
+            key = key.strip()
+            config[key] = value.strip()
+    return config
+
+
+def site_config(scheduler: str, config: dict = None) -> dict:
+    """The settings this run will use: config file, then environment, then a
+    default per scheduler. MILO_HOME and MILO_SCRATCH win because they are how
+    one submission borrows another installation."""
+    config = load_config() if config is None else config
+    return {
+        'scheduler': scheduler,
+        'scratch_root': (os.environ.get('MILO_SCRATCH')
+                         or config.get('scratch')
+                         or SCHEDULER_DEFAULTS[scheduler]['scratch']),
+        'g16_init': config.get('g16_setup', ''),
+        'account': os.environ.get('MILO_ACCOUNT') or config.get('account') or None,
+        # python3 inside the job, which the g16 setup lines are expected to
+        # provide; `python = <path>` in the config pins a specific one.
+        'python': config.get('python') or 'python3',
+        'partition': config.get('partition') or None,
+        'milo_home': os.environ.get('MILO_HOME') or config.get('milo_home', ''),
+    }
+
+
 SCHEDULERS = {
     'slurm': {
         'shebang': '#!/bin/bash',
@@ -219,28 +215,19 @@ def uge_directives(base: str, jobname: str, cpus: str, mem: str, walltime: str,
     return '\n'.join(lines)
 
 
-def detect_site() -> str:
-    """Which cluster is this? Slurm already knows; asking it beats matching
-    hostnames, and it is right on login and compute nodes alike."""
-    try:
-        out = subprocess.run(['scontrol', 'show', 'config'],
-                             capture_output=True, text=True, timeout=10)
-        m = re.search(r'^ClusterName\s*=\s*(\S+)', out.stdout, re.M)
-        name = m.group(1).casefold() if m else ''
-        if name in SITES:
-            return name
-    except (OSError, subprocess.SubprocessError):
-        pass   # no Slurm here at all, which is the normal case on Hoffman2
-    # UGE announces itself through SGE_ROOT, set for login and batch shells
-    # alike; qsub off PATH is expected in a non-interactive shell.
+def detect_scheduler() -> str:
+    """Slurm or UGE? Ask the schedulers themselves rather than matching
+    hostnames: this is right on login and compute nodes alike."""
     if os.environ.get('SGE_ROOT') or submit_command('uge'):
-        return 'hoffman2'
-    return 'local'
+        return 'uge'
+    return 'slurm'
 
 
-def plot_interpreter() -> str | None:
-    for exe in PLOT_PY_CANDIDATES:
-        if not Path(exe).is_file():
+def plot_interpreter(config: dict) -> str | None:
+    candidates = [config.get('plot_python'), sys.executable,
+                  shutil.which('python3')]
+    for exe in candidates:
+        if not exe or not Path(exe).is_file():
             continue
         probe = subprocess.run([exe, '-c', 'import ase, matplotlib'],
                                capture_output=True)
@@ -253,10 +240,10 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('inputs', nargs='+', help='Milo input files (.in)')
-    p.add_argument('--site', choices=sorted(SITES) + ['auto'], default='auto',
-                   help='cluster preset: g16 setup, scratch path, and any '
-                        'required account/partition. Default auto, read from '
-                        "Slurm's own ClusterName.")
+    p.add_argument('--scheduler', choices=['slurm', 'uge', 'auto'], default='auto',
+                   help='which scheduler to write directives for. Default auto: '
+                        'UGE if this machine has it, else Slurm. Paths and the '
+                        f'g16 setup come from {CONFIG_PATH}.')
     p.add_argument('--hoffman2', dest='remote', action='store_const',
                    const='hoffman2',
                    help='build for Hoffman2 AND run it there: rsync this '
@@ -310,11 +297,11 @@ def parse_args():
     args.time = walltime(args.time, p)
     # --hoffman2/--expanse mean "build for it AND run it there" -- one flag.
     if args.remote:
-        args.site = args.remote
+        args.scheduler = REMOTE_SCHEDULER[args.remote]
     elif args.wait:
         p.error('--wait only means anything with --hoffman2/--expanse.')
-    if args.site == 'auto':
-        args.site = detect_site()
+    if args.scheduler == 'auto':
+        args.scheduler = detect_scheduler()
     if args.rerun:
         args.force = True
     if args.backward and args.traj != 1:
@@ -367,16 +354,18 @@ def out_seed(out_file: Path) -> str | None:
     return None
 
 
-def milo_home(site: str) -> Path:
-    """Where Milo lives on this host. Not every cluster puts it in the same
-    place, and MILO_HOME overrides the preset, exactly as the generated
-    script does."""
-    return Path(os.environ.get('MILO_HOME')
-                or os.path.expandvars(SITES[site]['milo_home']))
+def milo_home(cfg: dict) -> Path:
+    """Where Milo lives, from MILO_HOME or the config file."""
+    home = cfg['milo_home']
+    if not home:
+        sys.exit('ERROR: Milo\'s location is not recorded. Run install_milo.sh, '
+                 f'or write `milo_home = <path>` into {CONFIG_PATH}, '
+                 'or export MILO_HOME.')
+    return Path(os.path.expandvars(home))
 
 
 def write_backward_inputs(base: str, members: list[int], cpus: str, mem: str,
-                          walltime: str, direction: str, site: str) -> Path:
+                          walltime: str, direction: str, cfg: dict) -> Path:
     """Generate one reversed input per finished member, in backward/.
 
     Milo ships the reversal (tools/setup_backward.py): it flips
@@ -386,7 +375,7 @@ def write_backward_inputs(base: str, members: list[int], cpus: str, mem: str,
     per-trajectory layout costs here. Regenerated every time: the .out is the
     only source of truth for a reversed input.
     """
-    tool = milo_home(site) / 'milo_1_0_3/tools/setup_backward.py'
+    tool = milo_home(cfg) / 'milo_1_0_3/tools/setup_backward.py'
     if not tool.is_file():
         sys.exit(f'ERROR: {tool} not found; cannot build reversed inputs.')
     out_dir = Path('backward')
@@ -482,9 +471,8 @@ def phase_pair(text: str) -> list[str]:
 def build_script(base: str, cpus: str, mem: str, pairs: list[str], walltime: str,
                  plot_py: str | None, traj: int, array: str, limit: int | None,
                  account: str | None, partition: str | None,
-                 constraint: str | None, site: str, rerun: bool,
+                 constraint: str | None, cfg: dict, rerun: bool,
                  backward: bool) -> str:
-    cfg = SITES[site]
     g16_init = cfg['g16_init']
     scratch_root = cfg['scratch_root']
     account = account or cfg['account']
@@ -565,7 +553,7 @@ fi
 
 set -uo pipefail
 
-# Environment-specific (--site {site}). MILO_HOME relocates Milo itself.
+# Paths resolved at submit time; MILO_HOME relocates Milo for one run.
 MILO_HOME="${{MILO_HOME:-{cfg["milo_home"]}}}"
 
 CPUS={cpus}                                        # Gaussian %nprocshared
@@ -700,10 +688,12 @@ def main():
     args = parse_args()
     if args.traj < 1:
         sys.exit(f'ERROR: --traj must be at least 1, got {args.traj}')
+    config = load_config()
+    cfg = site_config(args.scheduler, config)
     # plot_interpreter() returns a path on THIS machine, and plot_traj.py
     # lives next to this script -- neither exists on the cluster. Plot after
     # `rjob fetch`, when the trajectories are back here.
-    plot_py = None if args.remote else plot_interpreter()
+    plot_py = None if args.remote else plot_interpreter(config)
     if plot_py is None and not args.remote:
         print('NOTE: no interpreter with ase + matplotlib found; '
               'trajectories will run but will not be plotted.', file=sys.stderr)
@@ -756,11 +746,10 @@ def main():
                       f'{len(members)} finished member(s) of {base}.',
                       file=sys.stderr)
             else:
-                # The reversal runs locally on the fetched results, so it
-                # needs the local Milo even when the job goes to a cluster.
+                # The reversal runs here on the fetched results, so it needs
+                # the local installation even when the job goes to a cluster.
                 write_backward_inputs(base, members, cpus, mem, args.time,
-                                      direction,
-                                      'local' if args.remote else args.site)
+                                      direction, cfg)
                 print(f'NOTE: {len(members)} reversed input(s) written to '
                       f'backward/ from finished members of {base}.',
                       file=sys.stderr)
@@ -785,13 +774,12 @@ def main():
                   file=sys.stderr)
 
         limit = args.array_limit
-        if limit is None and args.site == 'local' and args.traj > 1:
-            # --mem is advisory here (TaskPlugin=task/none), so nothing stops
-            # 100 members from starting at once and thrashing the box. Cap them
-            # at the core count. On a cgroup cluster the scheduler does this.
-            limit = max(1, (os.cpu_count() or 8) // int(cpus))
-            print(f'NOTE: --array-limit {limit} ({os.cpu_count()} cores / '
-                  f'{cpus} per member). Pass --array-limit to override.',
+        if limit is None and config.get('array_limit') and args.traj > 1:
+            # A machine where nothing else throttles -- a workstation whose
+            # --mem is only advisory -- wants a cap written into the config.
+            # A cgroup cluster does not: the scheduler already does this.
+            limit = int(config['array_limit'])
+            print(f'NOTE: --array-limit {limit}, from {CONFIG_PATH}.',
                   file=sys.stderr)
 
         pairs = args.pairs or phase_pair(text)
@@ -837,7 +825,7 @@ def main():
                             traj=len(members),
                             array=array_spec(members), limit=limit,
                             account=args.account, partition=args.partition,
-                            constraint=args.constraint, site=args.site,
+                            constraint=args.constraint, cfg=cfg,
                             rerun=args.rerun, backward=args.backward)
         jobs.append((base, cpus, mem, pairs, script, body, len(members)))
 
@@ -860,11 +848,11 @@ def main():
             import remotejob      # ~/bin/Modules (PYTHONPATH); also the `rjob` CLI
             jobid = remotejob.submit(args.remote, script)
         else:
-            submit = submit_command(SITES[args.site]['scheduler'])
+            submit = submit_command(args.scheduler)
             if submit is None:
-                sys.exit(f'ERROR: no {SCHEDULERS[SITES[args.site]["scheduler"]]["submit"]}'
-                         f' on PATH for --site {args.site}. Use --no-submit and '
-                         'submit by hand, or run this on a login node.')
+                sys.exit(f'ERROR: no {SCHEDULERS[args.scheduler]["submit"]} on '
+                         f'PATH for --scheduler {args.scheduler}. Use --no-submit '
+                         'and submit by hand, or run this on a login node.')
             out = subprocess.run([submit, str(script)], capture_output=True, text=True)
             if out.returncode != 0:
                 sys.exit(f'ERROR: {Path(submit).name} failed for {script}: '

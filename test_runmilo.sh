@@ -3,15 +3,15 @@
 # Fails loudly if the skip-guard, atomic staging, --force, or failure
 # archiving stop doing what runmilo.py claims they do.
 set -uo pipefail
-# The tools are wherever this suite is: ~/bin on the workstation and
-# Expanse, ~/Scripts on Hoffman2.
 TOOLS="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 RAW="$TOOLS/runmilo.py"
 # Checks 1-26 exercise the Slurm dialect and drive it with SLURM_* variables, so
-# the site is pinned rather than auto-detected -- otherwise the suite generates
-# UGE scripts when it runs on Hoffman2 and every member lands on index 1.
-R() { "$RAW" --site local "$@"; }
+# the scheduler is pinned rather than auto-detected -- otherwise the suite
+# generates UGE scripts on a UGE machine and every member lands on index 1.
+R() { "$RAW" --scheduler slurm "$@"; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+# An installed config must not reach in and change what gets generated.
+export MILO_CONF="$T/absent.conf"
 cd "$T" || exit 1
 
 # --- stub milo: writes <job_name>.xyz, where job_name comes from stdout fd,
@@ -40,10 +40,13 @@ PY
 touch fakemilo/milo_1_0_3/__init__.py
 
 # --backward shells out to Milo's own tools/setup_backward.py, so the stub tree
-# needs the real one. Milo is not in the same place on every host, hence the
-# search; MILO_HOME then serves both generation and execution.
+# needs the real one. Where Milo lives is the installation's business, so ask
+# the config before guessing; MILO_HOME then serves generation and execution.
 mkdir -p fakemilo/milo_1_0_3/tools
-for cand in "$HOME/Programs/milo" "$HOME/Programs/milo-1.0.3"; do
+installed=$(sed -n 's/^ *milo_home *= *//p' "${MILO_CONF_REAL:-$HOME/.milo.conf}" 2>/dev/null)
+for cand in "$installed" "$HOME/milo/opt/milo-1.0.3" "$HOME/Programs/milo" \
+            "$HOME/Programs/milo-1.0.3"; do
+  [[ -n "$cand" ]] || continue
   if [[ -f "$cand/milo_1_0_3/tools/setup_backward.py" ]]; then
     cp "$cand/milo_1_0_3/tools/setup_backward.py" fakemilo/milo_1_0_3/tools/
     break
@@ -52,9 +55,9 @@ done
 [[ -f fakemilo/milo_1_0_3/tools/setup_backward.py ]] \
   || { echo "FAIL: no Milo install found to borrow setup_backward.py from"; exit 1; }
 export MILO_HOME="$T/fakemilo"
-# Self-contained fixture: runmilo.py only ever reads the $job section, and the
-# stub Milo ignores the rest, so the suite runs anywhere (workstation, Expanse)
-# without a file from someone's Desktop.
+# Self-contained fixture: runmilo.py only ever reads the $job section and the
+# stub Milo ignores the rest, so the suite runs anywhere without a fixture file
+# from somebody's machine.
 cat > DA_test.in <<'IN'
 $job
     gaussian_header         wb97xd/6-31G* int=ultrafine
@@ -295,11 +298,11 @@ grep -q 'ran a different input' err.txt && fail "resource override flagged as a 
 
 # --- Hoffman2 / UGE dialect ---
 
-# 27. the UGE site emits SGE directives, not Slurm ones, in the house idiom:
+# 27. UGE emits SGE directives, not Slurm ones, in the house idiom:
 #     h_data is per slot and h_vmem per slot x slots, times in seconds, and the
 #     USR1 warning lands before the hard limit
 rm -rf results results.failed backward
-"$RAW" DA_test.in --site hoffman2 --traj 3 -p 8 -m 12 -t 4 \
+"$RAW" DA_test.in --scheduler uge --traj 3 -p 8 -m 12 -t 4 \
   --array-limit 2 --no-submit --force >/dev/null 2>&1 || fail "hoffman2 generation failed"
 grep -q '^#SBATCH' DA_test_milo.sh && fail "Slurm directives leaked into a UGE script"
 grep -q '^#!/bin/bash -l$' DA_test_milo.sh || fail "UGE script is not a login shell"
@@ -325,7 +328,7 @@ uge 2 >/dev/null 2>&1 || fail "UGE member exited nonzero"
 #     submits the range and the members outside it step aside
 uge 1 >/dev/null 2>&1; uge 3 >/dev/null 2>&1
 rm -rf results/DA_test_002                     # 1 and 3 finished, 2 did not
-"$RAW" DA_test.in --site hoffman2 --backward --no-submit --force >/dev/null 2>&1 \
+"$RAW" DA_test.in --scheduler uge --backward --no-submit --force >/dev/null 2>&1 \
   || fail "hoffman2 --backward generation failed"
 grep -qE '^#\$ -t 1-3$' DA_test_rev_milo.sh || fail "sparse roster did not become a range"
 grep -q 'MEMBERS="1 3"' DA_test_rev_milo.sh || fail "no roster guard for the hole"

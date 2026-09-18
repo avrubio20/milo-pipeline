@@ -83,18 +83,33 @@ What you are reading this output for is two lines: the `gaussian` group and
   not your account — see the note in step 1. Log in properly, run `--check`
   again, and only chase it further if it still fails.
 
-## Step 4 — install
+## Step 4 — install, wherever you want it
 
-    ./install_milo.sh --add-path
+    ./install_milo.sh --prefix ~/milo --add-path
 
-This does four things and prints each one:
+`--prefix` is the one decision here: everything goes under that one directory,
+and you can put it anywhere you can write.
 
-1. Downloads Milo 1.0.3 and unpacks it to `~/Programs/milo-1.0.3`.
+1. Downloads Milo 1.0.3 and unpacks it into `~/milo/opt/milo-1.0.3`.
 2. Copies the four tools (`runmilo.py`, `milosum.py`, `prepmilo.py`,
-   `plot_traj.py`) and the two test suites into `~/Scripts`.
-3. Adds a line to your `~/.bashrc` putting `~/Scripts` on your `PATH`, so you
+   `plot_traj.py`) and the two test suites into `~/milo/bin`.
+3. Writes `~/.milo.conf`, recording where those went, which scheduler this
+   machine uses, and the lines that make Gaussian runnable inside a job. The
+   tools read that file, so you never have to tell them any of it again.
+4. Adds a line to your `~/.bashrc` putting `~/milo/bin` on your `PATH`, so you
    can type `runmilo.py` from any folder instead of a full path.
-4. Prints the commands to run next.
+5. Prints the commands to run next.
+
+If you want the pieces somewhere else — Milo on a project allocation, the tools
+in a `bin` directory you already have — override them individually:
+
+    ./install_milo.sh --bindir ~/bin --milo-dir /u/project/mygroup/milo-1.0.3
+
+`./install_milo.sh --help` lists all of them, and `--dry-run` shows you what
+any combination would do without writing anything.
+
+Changed your mind later? Re-run it with different paths, or edit `~/.milo.conf`
+directly — it is six lines of `key = value` and the tools read it every run.
 
 It will not overwrite a file that differs from its copy without `--force`, and
 re-running it is safe — a second run reports that everything is already current.
@@ -264,7 +279,7 @@ document you will read after this one.
 | `command not found: runmilo.py` | `PATH` line missing or shell not reloaded — step 5. If it works when you are logged in but not via `ssh host 'command'`, that is expected: see step 1 |
 | `--check` fails on `g16` but the group line passed | almost always the shell, not your account — step 1 |
 | `--check` fails on the `gaussian` group | you are not in it yet; jobs will fail until you are |
-| `ERROR: no Milo found at ...` | Milo is somewhere non-default: `export MILO_HOME=<path>` |
+| `Milo's location is not recorded` | no `~/.milo.conf` yet — run the installer, or `export MILO_HOME=<path>` |
 | job disappears in seconds, joblog mentions memory | asked for more memory than your `-l` line allows; raise `-m` |
 | `SKIP: ... already has results` | a finished trajectory is being protected; `--rerun` replaces it deliberately |
 | `REFUSING` from `milosum.py` | too few members finished to quote a ratio honestly; the inventory still prints |
@@ -299,11 +314,11 @@ updated tools up from a machine you develop on.
 
 Nothing is installed system-wide, so removing it is removing files:
 
-    rm -f ~/Scripts/{runmilo.py,milosum.py,prepmilo.py,plot_traj.py}
-    rm -f ~/Scripts/{test_runmilo.sh,test_milosum.sh}
-    rm -rf ~/Programs/milo-1.0.3
+    rm -rf ~/milo                   # or whatever you gave --prefix
+    rm -f ~/.milo.conf
     rm -rf ~/milo-pipeline          # the clone, if you want that gone too
 
-and delete the `PATH` line from `~/.bashrc` if nothing else uses `~/Scripts`.
+and delete the `PATH` line from `~/.bashrc`. One prefix, one config file, one
+line in `.bashrc` — that is the whole footprint.
 Your results are untouched by all of that — they live wherever you submitted
 from.

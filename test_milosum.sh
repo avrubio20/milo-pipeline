@@ -3,8 +3,7 @@
 # by construction. Fails loudly if the commitment criterion, the pairing rule,
 # or the completeness refusal stop doing what milosum.py claims they do.
 set -uo pipefail
-# The tools are wherever this suite is: ~/bin on the workstation and
-# Expanse, ~/Scripts on Hoffman2.
+# The tools are wherever this suite is.
 TOOLS="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 MS="$TOOLS/milosum.py"
 

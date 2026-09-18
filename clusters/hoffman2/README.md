@@ -9,15 +9,15 @@ detects this automatically through `SGE_ROOT`; `--site hoffman2` forces it.
 
 | what | where |
 |---|---|
-| Milo | `~/Programs/milo-1.0.3` |
-| scripts | `~/Scripts` (the install default here) |
+| Milo | `PREFIX/opt/milo-1.0.3` |
+| scripts | wherever you pointed `--prefix` |
 | scratch | `$TMPDIR` per job, node-local, removed by UGE |
 | test runs | wherever you submit from |
 
-If you keep Milo somewhere other than `~/Programs/milo-1.0.3` -- a project
-allocation, a group directory -- `export MILO_HOME=<that path>` and everything
-follows it. Group directories under `/u/project/<group>` are often readable
-only by members of that unix group, which is why the default is plain `$HOME`.
+Install where you like: `./install_milo.sh --prefix /u/project/<group>/milo`
+puts it in a group directory, `--prefix ~/milo` keeps it in your home. Home is
+the default because group directories are often readable only by members of
+that unix group.
 
 ## Setting up a new account
 
