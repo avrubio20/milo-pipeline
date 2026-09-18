@@ -222,10 +222,17 @@ normal modes for Milo to sample them properly).
 
     prepmilo.py -i freq/TS.out -o RUN --fs 200 -p 8 -m 12
 
-`freq/TS.out` is a stand-in for wherever your own Gaussian output actually is —
-there is no such file in this repository, and nothing creates one for you. If
-you do not have one yet, stop after step 6; the example already proved the
-install works.
+`freq/TS.out` is a stand-in for wherever your own Gaussian output actually is.
+
+If you do not have one yet, you can still try this step: the repository ships
+the Gaussian output the example was made from.
+
+    prepmilo.py -i ~/milo-pipeline/examples/DA_ts_freq.out -o RUN --fs 200 -p 8 -m 12
+
+That writes `RUN.in`, and you can compare it to `examples/DA_example.in` — they
+should agree. It also prints which atom pairs it found moving in the imaginary
+mode (`1-5 4-6` for this one), which is the part worth understanding before you
+trust it on your own system.
 
 This reads the Gaussian output and writes `RUN.in`, a Milo input: 200 fs of
 trajectory, 8 cpus, 12 GB. It also works out which atom pairs are moving in the

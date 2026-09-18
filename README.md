@@ -31,7 +31,8 @@ GitHub.
     milo_movie.py     trajectory animation
     test_runmilo.sh   30 checks, ~2 s, no scheduler needed
     test_milosum.sh   19 checks, ~2 s
-    examples/         a ready-to-run Diels-Alder input
+    examples/         a ready-to-run Diels-Alder input, and the Gaussian
+                      freq=hpmodes output it was made from
     clusters/         per-machine notes and deploy scripts
 
 **There is one copy of every tool, not one per machine.** `runmilo.py` detects

@@ -100,8 +100,8 @@ run() {
     if [[ $DRY -eq 1 ]]; then echo "  would: $(printf '%q ' "$@")"
     else "$@"; fi
 }
-ok()   { echo "  ok    $*"; }
-bad()  { echo "  FAIL  $*"; FAILED=1; }
+ok()   { echo "  ok    $*"; PASSED=$((PASSED + 1)); TOTAL=$((TOTAL + 1)); }
+bad()  { echo "  FAIL  $*"; FAILED=1;  TOTAL=$((TOTAL + 1)); }
 note() { echo "  note  $*"; }
 
 # An existing config fills in whatever you did not pass this time.
@@ -130,7 +130,7 @@ ACCOUNT="${ACCOUNT:-$CFG_ACCOUNT}"
 
 if [[ $CHECK -eq 1 ]]; then
     echo "Environment check ($HOST)"
-    FAILED=0; NO_SUBMIT=0
+    FAILED=0; NO_SUBMIT=0; PASSED=0; TOTAL=0
     [[ -f "$CONFIG" ]] && ok "config: $CONFIG" || note "no config yet; install first"
 
     if [[ "$SCHEDULER" == uge ]]; then
@@ -195,11 +195,12 @@ if [[ $CHECK -eq 1 ]]; then
 
     echo
     if [[ $FAILED -ne 0 ]]; then
-        echo "Fix the FAIL lines above before running anything."
+        echo "Passed $PASSED/$TOTAL checks. Fix the FAIL lines above."
     elif [[ $NO_SUBMIT -eq 1 ]]; then
-        echo "All good, except that this machine has no scheduler to submit to."
+        echo "Passed $PASSED/$TOTAL checks, but this machine has no scheduler"
+        echo "to submit to."
     else
-        echo "All good. Nothing was submitted."
+        echo "Passed $PASSED/$TOTAL checks."
     fi
     exit $FAILED
 fi
