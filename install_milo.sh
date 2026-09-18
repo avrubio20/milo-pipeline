@@ -155,11 +155,14 @@ if [[ $CHECK -eq 1 ]]; then
     # not. Some sites license it to a differently-named group.
     if (eval "$G16_SETUP" >/dev/null 2>&1; command -v g16 >/dev/null); then
         ok "g16 is reachable"
-        groups 2>/dev/null | tr ' ' '\n' | grep -qx gaussian \
+        # Captured, not piped: grep -q exits on the first match and pipefail
+        # then reports SIGPIPE for the earlier command as a failure.
+        in_group="$(groups 2>/dev/null)"
+        grep -qw gaussian <<<"$in_group" \
             || note "not in the 'gaussian' group, but g16 works -- your site"\
                     "may license it to another group"
     else
-        groups 2>/dev/null | tr ' ' '\n' | grep -qx gaussian \
+        grep -qw gaussian <<<"$(groups 2>/dev/null)" \
             || bad "you are not in the 'gaussian' group, which is usually why"
         bad "g16 is not reachable after the setup lines in $CONFIG"
         echo "        If you are in the gaussian group, this is usually the shell:"
