@@ -20,8 +20,8 @@
 #   --add-path        put bindir on your PATH (~/.bashrc, or ~/.cshrc under csh)
 #   --force           replace installed files that differ from these
 #
-# The choices land in the config file, and the tools read them from there, so
-# nothing has to be told twice. Re-running is safe and never submits a job.
+# Your choices are saved to the config file and read back by the tools.
+# Re-running is safe. Nothing here ever submits a job.
 set -uo pipefail
 
 MILO_URL="https://github.com/DanielEss-lab/milo/archive/refs/tags/1.0.3.tar.gz"
@@ -30,10 +30,8 @@ TOOLS=(runmilo.py milosum.py prepmilo.py plot_traj.py)
 SUITES=(test_runmilo.sh test_milosum.sh)
 SRC="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
-# Host knowledge lives here and nowhere else: how to reach Gaussian and python,
-# and which temporary directory the scheduler gives a job. Everything below is
-# written into the config file, so a machine this does not recognise is a
-# matter of passing --scratch and editing two lines, not of patching code.
+# Per-machine defaults. These get written into the config file, so an
+# unrecognised machine means editing the config, not this script.
 detect_host() {
     if [[ -n "${SGE_ROOT:-}" || -d /u/local/Modules ]]; then
         HOST=hoffman2
@@ -62,8 +60,7 @@ CONFIG="$HOME/.milo.conf"
 TARBALL=""; SHARED=0
 DRY=0; FORCE=0; CHECK=0; ADDPATH=0; EXAMPLE=0
 
-# Exits rather than returns: a value swallowed by the next flag is worse than
-# stopping, and this cannot run in a subshell or the exit would be lost.
+# Must not run in a subshell, or the exit is lost.
 argval() {
     [[ -n "${2:-}" && "${2:-}" != --* ]] && return 0
     echo "ERROR: $1 needs a value" >&2
@@ -98,23 +95,19 @@ ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*"; FAILED=1; }
 note() { echo "  note  $*"; }
 
-# What an existing install already chose. It fills in what you did not ask for
-# on this run -- so re-running without --scratch keeps the scratch you set --
-# and loses to any flag you did pass.
+# An existing config fills in whatever you did not pass this time.
 cfg() { [[ -f "$CONFIG" ]] && sed -n "s/^ *$1 *= *//p" "$CONFIG" | head -1; }
 CFG_BINDIR="$(cfg bindir)"; CFG_MILO="$(cfg milo_home)"
 CFG_SCRATCH="$(cfg scratch)"; CFG_ACCOUNT="$(cfg account)"
 CFG_SCHEDULER="$(cfg scheduler)"
-# g16_setup is several lines, its continuations indented, and a blank line ends
-# it -- the same shape runmilo.py reads, so --check tests what jobs will do.
+# g16_setup runs to several indented lines, ending at a blank one.
 CFG_G16=$([[ -f "$CONFIG" ]] && awk '
     /^g16_setup *=/ { sub(/^g16_setup *= */, ""); print; found=1; next }
     found && /^[[:space:]]*$/ { exit }
     found && /^[[:space:]]/ { sub(/^[[:space:]]+/, ""); print; next }
     found { exit }' "$CONFIG")
 
-# --prefix moves everything under it, so it beats a recorded bindir; --bindir
-# and --milo-dir beat both.
+# Order: --bindir/--milo-dir, then --prefix, then the config, then defaults.
 [[ -n "$PREFIX" && -z "$BINDIR" ]]   && BINDIR="$(expand "$PREFIX")/bin"
 [[ -n "$PREFIX" && -z "$MILO_DIR" ]] && MILO_DIR="$(expand "$PREFIX")/opt/$MILO_VERSION"
 BINDIR="$(expand "${BINDIR:-${CFG_BINDIR:-$DEFAULT_PREFIX/bin}}")"
@@ -130,7 +123,7 @@ if [[ $CHECK -eq 1 ]]; then
     [[ -f "$CONFIG" ]] && ok "config: $CONFIG" || note "no config yet; install first"
 
     if [[ "$SCHEDULER" == uge ]]; then
-        # qsub is off PATH in a non-interactive shell, so look where UGE puts it.
+        # qsub is off PATH in a non-interactive shell.
         qsub_path="$(command -v qsub 2>/dev/null)"
         for c in /u/systems/UGE*/bin/lx-amd64/qsub /u/local/bin/qsub; do
             [[ -n "$qsub_path" ]] && break
@@ -143,9 +136,8 @@ if [[ $CHECK -eq 1 ]]; then
             || note "no sbatch on PATH; submitting will not work from here"
     fi
 
-    # Whether g16 runs is the fact; the group is only the usual reason it does
-    # not. Sites license Gaussian to differently-named groups, so a missing
-    # 'gaussian' group with a working g16 is not an error.
+    # g16 running is what matters; the group is only the usual reason it does
+    # not. Some sites license it to a differently-named group.
     if (eval "$G16_SETUP" >/dev/null 2>&1; command -v g16 >/dev/null); then
         ok "g16 is reachable"
         groups 2>/dev/null | tr ' ' '\n' | grep -qx gaussian \
@@ -218,8 +210,7 @@ else
                 echo "       If this node has no way out, download it elsewhere" >&2
                 echo "       and pass --tarball FILE." >&2; exit 1; }
     fi
-    # The tarball has its own top-level directory; --strip-components drops it
-    # so MILO_DIR holds milo_1_0_3/ directly, whatever the release is called.
+    # --strip-components drops the tarball's own top directory.
     tar -xzf "$tarball" --strip-components=1 -C "$MILO_DIR" \
         || { echo "ERROR: could not unpack $tarball" >&2; exit 1; }
     [[ -n "$TARBALL" ]] || rm -f "$tarball"
@@ -254,8 +245,7 @@ else
         || { echo "ERROR: cannot create $(dirname "$CONFIG")" >&2; exit 1; }
     [[ ! -e "$CONFIG" || -w "$CONFIG" ]] \
         || { echo "ERROR: $CONFIG is not yours to write" >&2; exit 1; }
-    # Written aside and moved into place: a half-written config read by a job
-    # is worse than no config.
+    # Write aside, then move: never leave a half-written config.
     tmp_config="$CONFIG.$$"
     cat > "$tmp_config" <<CONF
 # Milo pipeline. Written by install_milo.sh on $(date +%F).
@@ -272,8 +262,7 @@ CONF
     [[ -s "$tmp_config" ]] && mv "$tmp_config" "$CONFIG" \
         || { rm -f "$tmp_config"; echo "ERROR: could not write $CONFIG" >&2; exit 1; }
     echo "  recorded; MILO_CONF overrides the location"
-    # A copy beside the tools, so someone who only has PREFIX/bin on their PATH
-    # gets these settings without being told them. Their own ~/.milo.conf wins.
+    # A copy here lets anyone with PREFIX/bin on their PATH use this install.
     shared_dir="$(dirname "$BINDIR")/etc"
     if mkdir -p "$shared_dir" 2>/dev/null && cp "$CONFIG" "$shared_dir/milo.conf" 2>/dev/null; then
         echo "  copy at $shared_dir/milo.conf for anyone else using this install"
@@ -287,7 +276,7 @@ if [[ $EXAMPLE -eq 1 ]]; then
     echo "  DA_example.in (16-atom Diels-Alder, 50 steps, 8 cpus / 12 GB)"
 fi
 
-# Which startup file depends on the login shell, and Hoffman2 hands out both.
+# bash and tcsh keep their PATH in different files.
 case "${SHELL:-/bin/bash}" in
     *csh) RC="$HOME/.cshrc"; PATH_LINE="setenv PATH \"\${PATH}:$BINDIR\"";;
     *)    RC="$HOME/.bashrc"; PATH_LINE="export PATH=\"\$PATH:$BINDIR\"";;
@@ -318,7 +307,7 @@ fi
 if [[ $SHARED -eq 1 ]]; then
     echo
     echo "Shared: making $BINDIR and $MILO_DIR group-readable"
-    # setgid on directories so anything added later keeps the group too.
+    # setgid: files added later keep the group.
     run chmod -R go+rX "$BINDIR" "$MILO_DIR" \
         || echo "  WARNING: could not relax permissions; others may not read it" >&2
     run find "$BINDIR" "$MILO_DIR" -type d -exec chmod g+s {} + 2>/dev/null

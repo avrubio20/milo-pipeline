@@ -86,16 +86,11 @@ PLOT = LOCAL / 'plot_traj.py'
 # one explicitly; otherwise this interpreter and plain python3 are tried.
 
 
-# What a site needs is three things: how g16 gets onto PATH, where node-local
-# scratch lives, and whether the scheduler wants an account. install_milo.sh
-# records all three in the config below, so installing somewhere new means
-# editing that file rather than this one. Two things here are still specific:
-# the UGE directives follow Hoffman2's conventions, and --hoffman2/--expanse
-# name the clusters they submit to.
+# Paths, the g16 setup and the account come from the config install_milo.sh
+# writes. The UGE directives below follow Hoffman2's conventions.
 def _config_path() -> Path:
-    """MILO_CONF, else your own ~/.milo.conf, else the one beside the tools --
-    which is how a second person can use an install someone else made: the
-    tools are on their PATH, so the config that came with them is found too."""
+    """MILO_CONF, else ~/.milo.conf, else the config beside the tools -- which
+    is how you can use an install someone else made."""
     if os.environ.get('MILO_CONF'):
         return Path(os.environ['MILO_CONF'])
     personal = Path.home() / '.milo.conf'
@@ -109,11 +104,9 @@ CONFIG_PATH = _config_path()
 
 REMOTE_SCHEDULER = {'hoffman2': 'uge', 'expanse': 'slurm'}
 
-# Everything after the walltime on UGE's -l line is site policy: which node
-# pool, which architecture. `uge_resources = ...` in the config replaces it.
+# Site policy; `uge_resources` in the config replaces it.
 UGE_RESOURCES = 'arch=intel*'
-# The parallel environment's name is a local choice: shared/smp/openmp/orte all
-# exist in the wild. `uge_pe` in the config names yours.
+# Sites call theirs shared/smp/openmp/orte; `uge_pe` in the config names it.
 UGE_PE = 'shared*'
 
 SCHEDULER_DEFAULTS = {
@@ -123,9 +116,8 @@ SCHEDULER_DEFAULTS = {
 
 
 def load_config(path: Path = None) -> dict:
-    """Read the config install_milo.sh wrote: `key = value`, and indented
-    lines continue the value above (which is how g16_setup carries several
-    shell lines). Absent is not an error -- the defaults still run."""
+    """`key = value`, with indented lines continuing the value above. No
+    config is not an error; the defaults still work."""
     path = path or CONFIG_PATH
     config, key = {}, None
     try:
@@ -150,9 +142,8 @@ def load_config(path: Path = None) -> dict:
 
 
 def site_config(scheduler: str, config: dict = None) -> dict:
-    """The settings this run will use: config file, then environment, then a
-    default per scheduler. MILO_HOME and MILO_SCRATCH win because they are how
-    one submission borrows another installation."""
+    """Settings for this run: environment first, then config, then a default
+    per scheduler."""
     config = load_config() if config is None else config
     return {
         'scheduler': scheduler,
@@ -161,8 +152,7 @@ def site_config(scheduler: str, config: dict = None) -> dict:
                          or SCHEDULER_DEFAULTS[scheduler]['scratch']),
         'g16_init': config.get('g16_setup', ''),
         'account': os.environ.get('MILO_ACCOUNT') or config.get('account') or None,
-        # python3 inside the job, which the g16 setup lines are expected to
-        # provide; `python = <path>` in the config pins a specific one.
+        # The g16 setup lines are expected to provide this.
         'python': config.get('python') or 'python3',
         'uge_resources': config.get('uge_resources') or UGE_RESOURCES,
         'uge_pe': config.get('uge_pe') or UGE_PE,
@@ -198,9 +188,7 @@ SCHEDULERS = {
     },
 }
 
-# qsub is not on PATH in a non-interactive shell (runorca.py hits the same
-# thing), so UGE's own layout is searched before giving up. $SGE_ROOT/bin/<arch>
-# is where every UGE installation puts it, whatever the version.
+# qsub is off PATH in a non-interactive shell, so look where UGE puts it.
 QSUB_CANDIDATES = ('/u/local/bin/qsub', '/usr/bin/qsub')
 
 
@@ -252,10 +240,9 @@ def uge_directives(jobname: str, cpus: str, mem: str, walltime: str,
 
 
 def detect_scheduler() -> str | None:
-    """Slurm or UGE, by asking the schedulers themselves rather than matching
-    hostnames. None when neither is here: that is the case where a recorded
-    scheduler is worth trusting, and the only one -- a home directory shared
-    between two clusters would otherwise carry the wrong answer around."""
+    """Slurm or UGE, asked of the machine rather than guessed from its name.
+    None if neither is here -- only then is a recorded scheduler worth
+    trusting, since one home directory can serve two clusters."""
     if os.environ.get('SGE_ROOT') or submit_command('uge'):
         return 'uge'
     if submit_command('slurm'):
@@ -315,8 +302,7 @@ def parse_args():
     p.add_argument('--pairs', nargs='+', default=None,
                    help='1-based atom pairs to plot, e.g. 1-5 4-6 '
                         '(default: the pair named by `phase`)')
-    # 24 h, not more: past that UGE needs `highp`, which only runs on nodes
-    # your group owns. Ask for longer when you know you have them.
+    # Past 24 h, UGE needs `highp` -- nodes your group owns.
     p.add_argument('-t', '--time', default='24:00:00',
                    help='walltime: 24 or 24h (hours), 90m (minutes), or '
                         'HH:MM:SS (default: 48:00:00)')
@@ -398,7 +384,7 @@ def out_seed(out_file: Path) -> str | None:
 
 
 def milo_home(cfg: dict) -> Path:
-    """Where Milo lives, from MILO_HOME or the config file."""
+    """Where Milo lives: MILO_HOME, else the config."""
     home = cfg['milo_home']
     if not home:
         sys.exit('ERROR: Milo\'s location is not recorded. Run install_milo.sh, '
@@ -680,8 +666,7 @@ trap _on_exit EXIT
 set +u
 {g16_init}
 set -u
-# Say which piece is missing here. Without this the job runs on until Milo
-# cannot import, or Gaussian is not found, several confusing lines later.
+# Name the missing piece now, not several confusing lines later.
 command -v g16 >/dev/null || {{
   echo "ERROR: g16 is not on PATH after the g16_setup lines in the Milo" \
        "config. Fix g16_setup there, or load Gaussian before submitting." >&2
@@ -830,9 +815,8 @@ def main():
 
         limit = args.array_limit
         if limit is None and config.get('array_limit') and args.traj > 1:
-            # A machine where nothing else throttles -- a workstation whose
-            # --mem is only advisory -- wants a cap written into the config.
-            # A cgroup cluster does not: the scheduler already does this.
+            # For machines where nothing else throttles. A cgroup cluster
+            # does not need this; the scheduler already caps you.
             limit = int(config['array_limit'])
             print(f'NOTE: --array-limit {limit}, from {CONFIG_PATH}.',
                   file=sys.stderr)

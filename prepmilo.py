@@ -29,8 +29,8 @@ from pathlib import Path
 
 @functools.lru_cache(maxsize=1)
 def milo_home() -> Path:
-    """Where Milo lives, from the same config runmilo.py reads. Called on
-    first use, not at import, so --help works without an installation."""
+    """Where Milo lives, from the config runmilo.py reads. Resolved on first
+    use, so --help works without an installation."""
     from runmilo import CONFIG_PATH, load_config     # installed side by side
     home = os.environ.get('MILO_HOME') or load_config().get('milo_home')
     if not home:

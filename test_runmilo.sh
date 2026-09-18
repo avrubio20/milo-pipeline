@@ -9,17 +9,15 @@ RAW="$TOOLS/runmilo.py"
 # the scheduler is pinned rather than auto-detected -- otherwise the suite
 # generates UGE scripts on a UGE machine and every member lands on index 1.
 R() { "$RAW" --scheduler slurm "$@"; }
-# Noted before the suite hides it below: this is the config of the installation
-# you are testing, and it is the best clue to where a real Milo lives.
+# Saved before the line below hides it: it says where a real Milo lives.
 REAL_CONF="${MILO_CONF:-$HOME/.milo.conf}"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 # An installed config must not reach in and change what gets generated.
 export MILO_CONF="$T/absent.conf"
 cd "$T" || exit 1
 
-# --- stub g16: the generated script refuses to start without Gaussian on
-#     PATH, and these checks exercise the script, not Gaussian. Milo itself is
-#     what would call it, and Milo here is a stub that does not. ---
+# --- stub g16: the script refuses to start without it, and the stub Milo
+#     below never calls it ---
 mkdir -p fakebin
 printf '#!/bin/sh\nexit 0\n' > fakebin/g16
 chmod +x fakebin/g16
@@ -54,9 +52,7 @@ touch fakemilo/milo_1_0_3/__init__.py
 # needs the real one. Where Milo lives is the installation's business, so ask
 # the config before guessing; MILO_HOME then serves generation and execution.
 mkdir -p fakemilo/milo_1_0_3/tools
-# Where a real Milo might be, most specific first: what the caller already
-# points at, then the install layout (this suite sits in PREFIX/bin, Milo goes
-# in PREFIX/opt), then the config, then the older conventions.
+# Where a real Milo might be, most specific first.
 inherited="${MILO_HOME:-}"
 configured=$(sed -n 's/^ *milo_home *= *//p' "$REAL_CONF" 2>/dev/null)
 for cand in "$inherited" "$TOOLS/../opt/milo-1.0.3" "$configured" \
@@ -67,8 +63,7 @@ for cand in "$inherited" "$TOOLS/../opt/milo-1.0.3" "$configured" \
     break
   fi
 done
-# The detail goes first and the verdict last: install_milo.sh --check reports a
-# suite by its final line, so that line has to stand on its own.
+# Verdict last: --check reports a suite by its final line.
 [[ -f fakemilo/milo_1_0_3/tools/setup_backward.py ]] || {
   echo "Looked in: \$MILO_HOME, $TOOLS/../opt/milo-1.0.3, milo_home in"
   echo "$REAL_CONF, ~/Programs/milo and ~/Programs/milo-1.0.3."
