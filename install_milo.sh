@@ -87,10 +87,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ $CHECK -eq 1 ]] \
+   && [[ $EXAMPLE -eq 1 || $ADDPATH -eq 1 || $SHARED -eq 1 || $DRY -eq 1 || $FORCE -eq 1 ]]; then
+    echo "ERROR: --check only reports. Run it on its own, then install." >&2
+    exit 1
+fi
+
 expand() { echo "${1/#\~/$HOME}"; }
 CONFIG="$(expand "$CONFIG")"
 
-run() { if [[ $DRY -eq 1 ]]; then echo "  would: $*"; else "$@"; fi; }
+run() {
+    if [[ $DRY -eq 1 ]]; then echo "  would: $(printf '%q ' "$@")"
+    else "$@"; fi
+}
 ok()   { echo "  ok    $*"; }
 bad()  { echo "  FAIL  $*"; FAILED=1; }
 note() { echo "  note  $*"; }
@@ -114,12 +123,14 @@ BINDIR="$(expand "${BINDIR:-${CFG_BINDIR:-$DEFAULT_PREFIX/bin}}")"
 MILO_DIR="$(expand "${MILO_DIR:-${CFG_MILO:-$DEFAULT_PREFIX/opt/$MILO_VERSION}}")"
 SCRATCH="${SCRATCH:-${CFG_SCRATCH:-$DEF_SCRATCH}}"
 ACCOUNT="${ACCOUNT:-$CFG_ACCOUNT}"
-SCHEDULER="${CFG_SCHEDULER:-$SCHEDULER}"
+# Detected wins, matching runmilo.py: one home directory can serve two
+# clusters, and the machine you are on is the better authority.
+[[ "$HOST" == unknown && -n "$CFG_SCHEDULER" ]] && SCHEDULER="$CFG_SCHEDULER"
 [[ -n "$CFG_G16" ]] && G16_SETUP="$CFG_G16"
 
 if [[ $CHECK -eq 1 ]]; then
     echo "Environment check ($HOST)"
-    FAILED=0
+    FAILED=0; NO_SUBMIT=0
     [[ -f "$CONFIG" ]] && ok "config: $CONFIG" || note "no config yet; install first"
 
     if [[ "$SCHEDULER" == uge ]]; then
@@ -132,8 +143,12 @@ if [[ $CHECK -eq 1 ]]; then
         [[ -n "$qsub_path" ]] && ok "qsub: $qsub_path" \
             || bad "no qsub found -- are you on a login node?"
     else
-        command -v sbatch >/dev/null && ok "sbatch: $(command -v sbatch)" \
-            || note "no sbatch on PATH; submitting will not work from here"
+        if command -v sbatch >/dev/null; then
+            ok "sbatch: $(command -v sbatch)"
+        else
+            NO_SUBMIT=1
+            note "no sbatch on PATH; you can prepare jobs here but not submit"
+        fi
     fi
 
     # g16 running is what matters; the group is only the usual reason it does
@@ -162,18 +177,30 @@ if [[ $CHECK -eq 1 ]]; then
 
     for suite in "${SUITES[@]}"; do
         path="$BINDIR/$suite"; [[ -f "$path" ]] || path="$SRC/$suite"
+        if [[ -f "$BINDIR/$suite" && -f "$SRC/$suite" ]] \
+           && ! cmp -s "$BINDIR/$suite" "$SRC/$suite"; then
+            note "$suite here differs from the installed one; testing the"\
+                 "installed copy. Re-run with --force to update it."
+        fi
         if [[ -f "$path" ]]; then
             echo "  ...   running $suite (seconds here, minutes on a busy login node)"
-            result=$(bash "$path" 2>&1 | tail -1)
-            [[ "$result" == PASS* ]] && ok "$suite: $result" || bad "$suite: $result"
+            output=$(bash "$path" 2>&1); rc=$?
+            result=$(tail -1 <<<"$output")
+            [[ $rc -eq 0 && "$result" == PASS* ]] \
+                && ok "$suite: $result" || bad "$suite: $result (exit $rc)"
         else
-            note "$suite not found; skipping"
+            bad "$suite not found in $BINDIR or $SRC -- reinstall"
         fi
     done
 
     echo
-    [[ $FAILED -eq 0 ]] && echo "All good. Nothing was submitted." \
-                        || echo "Fix the FAIL lines above before running anything."
+    if [[ $FAILED -ne 0 ]]; then
+        echo "Fix the FAIL lines above before running anything."
+    elif [[ $NO_SUBMIT -eq 1 ]]; then
+        echo "All good, except that this machine has no scheduler to submit to."
+    else
+        echo "All good. Nothing was submitted."
+    fi
     exit $FAILED
 fi
 
@@ -188,9 +215,26 @@ echo
 if [[ -f "$MILO_DIR/milo_1_0_3/__main__.py" ]]; then
     echo "Milo: already at $MILO_DIR"
 elif [[ $DRY -eq 1 ]]; then
-    echo "  would: download $MILO_URL into $MILO_DIR"
+    [[ -n "$TARBALL" ]] && echo "  would: unpack $TARBALL into $MILO_DIR" \
+                        || echo "  would: download $MILO_URL into $MILO_DIR"
 else
+    if [[ -d "$MILO_DIR" ]] && [[ -n "$(ls -A "$MILO_DIR" 2>/dev/null)" ]] \
+       && [[ $FORCE -eq 0 ]]; then
+        echo "ERROR: $MILO_DIR is not empty and is not a Milo install." >&2
+        echo "       Pick another --milo-dir, or --force to unpack into it." >&2
+        exit 1
+    fi
+    created_dir=0
+    [[ -d "$MILO_DIR" ]] || created_dir=1
     mkdir -p "$MILO_DIR" || { echo "ERROR: cannot create $MILO_DIR" >&2; exit 1; }
+    # Whatever goes wrong below, do not leave debris behind.
+    cleanup_milo() {
+        [[ -z "${tarball:-}" || -n "$TARBALL" ]] || rm -f "$tarball"
+        [[ $created_dir -eq 1 && ! -f "$MILO_DIR/milo_1_0_3/__main__.py" ]] \
+            && rm -rf "$MILO_DIR"
+        return 0
+    }
+    trap cleanup_milo EXIT
     if [[ -n "$TARBALL" ]]; then
         echo "Milo: unpacking $TARBALL into $MILO_DIR"
         tarball="$TARBALL"
@@ -213,9 +257,9 @@ else
     # --strip-components drops the tarball's own top directory.
     tar -xzf "$tarball" --strip-components=1 -C "$MILO_DIR" \
         || { echo "ERROR: could not unpack $tarball" >&2; exit 1; }
-    [[ -n "$TARBALL" ]] || rm -f "$tarball"
-    [[ -f "$MILO_DIR/milo_1_0_3/__main__.py" ]] \
-        || { echo "ERROR: $MILO_DIR is not a Milo install" >&2; exit 1; }
+    [[ -f "$MILO_DIR/milo_1_0_3/__main__.py" && -d "$MILO_DIR/milo_1_0_3/tools" ]] \
+        || { echo "ERROR: $MILO_DIR does not look like Milo after unpacking" >&2; exit 1; }
+    cleanup_milo; trap - EXIT
 fi
 
 echo "Tools: $BINDIR"
@@ -271,8 +315,11 @@ fi
 
 if [[ $EXAMPLE -eq 1 ]]; then
     echo "Example: ./milo_example"
-    run mkdir -p milo_example
-    run cp "$SRC/examples/DA_example.in" milo_example/
+    [[ -f "$SRC/examples/DA_example.in" ]] \
+        || { echo "ERROR: $SRC/examples/DA_example.in is missing" >&2; exit 1; }
+    run mkdir -p milo_example || exit 1
+    run cp "$SRC/examples/DA_example.in" milo_example/ \
+        || { echo "ERROR: cannot write ./milo_example" >&2; exit 1; }
     echo "  DA_example.in (16-atom Diels-Alder, 50 steps, 8 cpus / 12 GB)"
 fi
 
@@ -282,13 +329,15 @@ case "${SHELL:-/bin/bash}" in
     *)    RC="$HOME/.bashrc"; PATH_LINE="export PATH=\"\$PATH:$BINDIR\"";;
 esac
 echo
-if [[ ":$PATH:" == *":$BINDIR:"* ]]; then
+if [[ ":${PATH:-}:" == *":$BINDIR:"* ]]; then
     echo "PATH: $BINDIR is already on it."
 elif [[ $ADDPATH -eq 1 ]]; then
     if grep -qsF "$PATH_LINE" "$RC"; then
         echo "$RC already has: $PATH_LINE"
     else
-        run bash -c "printf '\n# Milo pipeline\n%s\n' \"\$1\" >> '$RC'" _ "$PATH_LINE"
+        run bash -c "printf '\n# Milo pipeline\n%s\n' \"\$1\" >> '$RC'" _ "$PATH_LINE" \
+            || { echo "ERROR: cannot write $RC; add this line yourself:" >&2
+                 echo "    $PATH_LINE" >&2; exit 1; }
         echo "$RC += $PATH_LINE"
     fi
     echo "Run 'source $RC' or log back in."
@@ -306,14 +355,21 @@ fi
 
 if [[ $SHARED -eq 1 ]]; then
     echo
-    echo "Shared: making $BINDIR and $MILO_DIR group-readable"
+    echo "Shared: making $BINDIR and $MILO_DIR readable by your group"
+    run chmod -R g+rX "$BINDIR" "$MILO_DIR" \
+        || { echo "ERROR: could not make the install group-readable" >&2; exit 1; }
     # setgid: files added later keep the group.
-    run chmod -R go+rX "$BINDIR" "$MILO_DIR" \
-        || echo "  WARNING: could not relax permissions; others may not read it" >&2
-    run find "$BINDIR" "$MILO_DIR" -type d -exec chmod g+s {} + 2>/dev/null
-    parent="$(dirname "$BINDIR")"
-    [[ -x "$parent" && -r "$parent" ]] \
-        || echo "  WARNING: $parent is not traversable by others" >&2
+    run find "$BINDIR" "$MILO_DIR" -type d -exec chmod g+s {} + \
+        || echo "  WARNING: could not set setgid; new files may land in the" \
+                "wrong group" >&2
+    # Group read is useless if the group cannot walk in from above. Test the
+    # directory's own mode, not whether *you* can enter it.
+    for d in "$(dirname "$BINDIR")" "$(dirname "$MILO_DIR")"; do
+        perms="$(stat -c %A "$d" 2>/dev/null)"
+        [[ "${perms:5:1}" == x ]] \
+            || echo "  WARNING: $d ($perms) is not enterable by your group;" \
+                    "they will not reach this install" >&2
+    done
 fi
 
 if [[ $STALE -eq 1 ]]; then
