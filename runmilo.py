@@ -62,6 +62,9 @@ remotejob.py, which is a separate tool and not part of this repository:
     runmilo.py DA_fwd.in --traj 20 --hoffman2     # rsync up, qsub there
     rjob fetch                                    # results back here, remote copy deleted
 
+The script is built from that cluster's config, copied once to
+~/.milo.hoffman2.conf or ~/.milo.expanse.conf (scp <host>:.milo.conf ...).
+
 Note that --mem is advisory on a scheduler without cgroups and enforced on one
 with them (TaskPlugin=task/cgroup), where under-declaring it kills the member.
 Declare it honestly either way.
@@ -88,9 +91,13 @@ PLOT = LOCAL / 'plot_traj.py'
 
 # Paths, the g16 setup and the account come from the config install_milo.sh
 # writes. The UGE directives below follow Hoffman2's conventions.
-def _config_path() -> Path:
+def _config_path(remote: str = None) -> Path:
     """MILO_CONF, else ~/.milo.conf, else the config beside the tools -- which
-    is how you can use an install someone else made."""
+    is how you can use an install someone else made. For --hoffman2/--expanse,
+    ~/.milo.<cluster>.conf: a copy of that cluster's own config, because the
+    script is built here but its paths and g16 setup must be the cluster's."""
+    if remote:
+        return Path.home() / f'.milo.{remote}.conf'
     if os.environ.get('MILO_CONF'):
         return Path(os.environ['MILO_CONF'])
     personal = Path.home() / '.milo.conf'
@@ -766,8 +773,17 @@ def main():
     args = parse_args()
     if args.traj < 1:
         sys.exit(f'ERROR: --traj must be at least 1, got {args.traj}')
-    config = load_config()
+    conf_path = _config_path(args.remote)
+    if args.remote and not conf_path.is_file():
+        import remotejob
+        sys.exit(f'ERROR: {conf_path} not found. The job runs on {args.remote}, '
+                 'so it needs that cluster\'s Milo config, not this one:\n'
+                 f'  scp {remotejob.HOSTS[args.remote].ssh}:.milo.conf {conf_path}')
+    config = load_config(conf_path)
     cfg = site_config(args.scheduler, config)
+    if args.remote:
+        # A local MILO_HOME (.bash_aris exports one) is a path on this machine.
+        cfg['milo_home'] = config.get('milo_home', '')
     milo_home(cfg)      # unknown location fails here, not inside the job
     # plot_interpreter() returns a path on THIS machine, and plot_traj.py
     # lives next to this script -- neither exists on the cluster. Plot after
@@ -828,7 +844,9 @@ def main():
                 # The reversal runs here on the fetched results, so it needs
                 # the local installation even when the job goes to a cluster.
                 write_backward_inputs(base, members, cpus, mem, args.time,
-                                      direction, cfg)
+                                      direction,
+                                      site_config(args.scheduler)
+                                      if args.remote else cfg)
                 print(f'NOTE: {len(members)} reversed input(s) written to '
                       f'backward/ from finished members of {base}.',
                       file=sys.stderr)
@@ -857,7 +875,7 @@ def main():
             # For machines where nothing else throttles. A cgroup cluster
             # does not need this; the scheduler already caps you.
             limit = int(config['array_limit'])
-            print(f'NOTE: --array-limit {limit}, from {CONFIG_PATH}.',
+            print(f'NOTE: --array-limit {limit}, from {conf_path}.',
                   file=sys.stderr)
 
         pairs = args.pairs or phase_pair(text)
