@@ -72,6 +72,8 @@ def miloscene(xyz, pairs='', bonded=BONDED, style='arismol', step_fs=1.0):
     cmd.frame(n)
     cmd.orient(OBJ)
     cmd.turn('x', -15)
+    if pairs:
+        _face_pair(*pairs[0], n)
     cmd.zoom(OBJ, 1.4, complete=1)
 
     # Push each label sideways, off the bond it measures. Which side is
@@ -91,6 +93,29 @@ def miloscene(xyz, pairs='', bonded=BONDED, style='arismol', step_fs=1.0):
 
     cmd.frame(1)
     return pairs
+
+
+def _face_pair(i, j, state):
+    """Turn about screen y until the i-j bond lies in the screen plane.
+
+    `orient` picks the view from the molecule's principal axes and can leave
+    the forming bond pointing at the camera -- on Mayo_TS it closed 0.36 A and
+    moved a few pixels. The turn sign convention is not worth deriving: try
+    each angle and keep the one with the least depth along the bond.
+    """
+    import numpy as np
+    xyz = np.array(cmd.get_coords(OBJ, state))
+    bond = xyz[j - 1] - xyz[i - 1]
+    start = cmd.get_view()
+
+    def depth():
+        rot = np.array(cmd.get_view()[:9]).reshape(3, 3)
+        return abs(bond.dot(rot)[2])     # camera z of the bond (column-major)
+
+    best = min(range(0, 180, 5),
+               key=lambda a: (cmd.set_view(start), cmd.turn('y', a), depth())[2])
+    cmd.set_view(start)
+    cmd.turn('y', best)
 
 
 def _set_bonds(pairs, state, bonded):
