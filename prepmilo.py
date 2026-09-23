@@ -105,6 +105,12 @@ def parse_args():
                      help='GB for Gaussian %%mem (default: 12). runmilo.py asks '
                           'the scheduler for a little more than this.')
 
+    io.add_argument('--sosd', action='store_true',
+                    help='accept a second-order saddle point (more than one '
+                         'imaginary mode) and follow the first. Refused '
+                         'without this, since it usually means the TS '
+                         'optimization did not finish.')
+
     legacy = p.add_argument_group('legacy')
     legacy.add_argument('-n', '--trajectories', type=int, default=None,
                         help="Milo's own way of making an ensemble: N copies, "
@@ -146,16 +152,33 @@ def auto_phase(text: str) -> tuple[str, list[tuple[str, float]]]:
     That mode is the reaction coordinate; the pair that moves most along it is
     the least ambiguous sensor for which way the trajectory is headed.
     """
-    import numpy as np
-    mol = [l.split() for l in section(text, 'molecule').strip().split('\n')[1:] if l.strip()]
-    sym = [r[0] for r in mol]
-    X = np.array([[float(v) for v in r[1:4]] for r in mol])
-    row = section(text, 'frequency_data').strip().split('\n')[0].split()
-    if float(row[0]) >= 0:
+    if not imaginary_modes(text):
         sys.exit('ERROR: the first mode is not imaginary — this is not a transition '
                  'state, or the frequency job converged to a minimum.')
-    D = np.array([float(v) for v in row[3:]]).reshape(-1, 3)
+    ranked = rank_pairs(text, 0)
+    return ranked[0][0], ranked[:4]
 
+
+def _mode(text: str, m: int):
+    """Symbols, TS geometry and mode-m displacements, from the Milo sections."""
+    import numpy as np
+    mol = [l.split() for l in section(text, 'molecule').strip().split('\n')[1:] if l.strip()]
+    X = np.array([[float(v) for v in r[1:4]] for r in mol])
+    row = section(text, 'frequency_data').strip().split('\n')[m].split()
+    return [r[0] for r in mol], X, np.array([float(v) for v in row[3:]]).reshape(-1, 3)
+
+
+def imaginary_modes(text: str) -> list[float]:
+    """Every imaginary frequency. Milo writes them negative and sorted first."""
+    freqs = [float(l.split()[0]) for l in
+             section(text, 'frequency_data').strip().split('\n') if l.strip()]
+    return [f for f in freqs if f < 0]
+
+
+def rank_pairs(text: str, m: int) -> list[tuple[str, float]]:
+    """Heavy-atom pairs by how much their distance changes along mode m."""
+    import numpy as np
+    sym, X, D = _mode(text, m)
     ranked = []
     for i in range(len(sym)):
         for j in range(i + 1, len(sym)):
@@ -165,7 +188,20 @@ def auto_phase(text: str) -> tuple[str, list[tuple[str, float]]]:
             d1 = np.linalg.norm((X[i] + D[i]) - (X[j] + D[j]))
             ranked.append((f'{i+1}-{j+1}', d1 - d0))
     ranked.sort(key=lambda t: -abs(t[1]))
-    return ranked[0][0], ranked[:4]
+    return ranked
+
+
+def saddle_report(text: str) -> str:
+    """One line per imaginary mode: frequency, atoms moving most, top pair."""
+    import numpy as np
+    lines = []
+    for m, freq in enumerate(imaginary_modes(text)):
+        sym, _, D = _mode(text, m)
+        mag = np.linalg.norm(D, axis=1)
+        movers = ', '.join(f'{sym[a]}{a + 1}' for a in np.argsort(-mag)[:3])
+        pair, delta = rank_pairs(text, m)[0]
+        lines.append(f'  {freq:9.1f}i  {movers:<18} ({pair} {delta:+.2f} A)')
+    return '\n'.join(lines)
 
 
 def moving_pairs(ranked: list[tuple[str, float]]) -> list[str]:
@@ -213,6 +249,21 @@ def main():
                  'Re-run with --force if you mean to replace it.')
 
     args._raw = run_parse_frequencies(freq_out)
+
+    # Milo follows mode 0 only; any other imaginary mode is silently sampled as
+    # if it were a vibration. That is a second-order saddle, not a TS.
+    n_imag = len(imaginary_modes(args._raw))
+    if n_imag > 1:
+        report = saddle_report(args._raw)
+        if not args.sosd:
+            sys.exit(f'ERROR: {n_imag} imaginary modes in {freq_out} -- a '
+                     f'second-order saddle point, not a transition state:\n'
+                     f'{report}\n'
+                     'Re-optimize the TS until only one mode is imaginary. If '
+                     'you really mean to run from this saddle (following the '
+                     'first mode), re-run with --sosd.')
+        print(f'WARNING: --sosd: {n_imag} imaginary modes; following the first.\n'
+              f'{report}', file=sys.stderr)
 
     if args.phase == 'auto':
         pair, ranked = auto_phase(args._raw)
